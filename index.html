@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Longitudinal Track-Bridge Interaction</title>
+<style>
+/* Layout after TBI_GUI.m: left column symbols, input tabs and the model,
+   right column results (Tables, Diagrams). Background as the MATLAB figure. */
+:root { --bg: #f0f0f0; --line: #bfbfbf; --fs: 12px; }
+html, body { margin: 0; padding: 0; background: #e4e4e4; color: #000;
+             font: var(--fs) "Segoe UI", system-ui, sans-serif; }
+#app { display: grid; grid-template-columns: 640px 620px; gap: 12px; padding: 10px;
+       width: max-content; margin: 10px auto; background: var(--bg);
+       box-shadow: 0 1px 6px rgba(0,0,0,.22); }
+#left { display: flex; flex-direction: column; gap: 6px; height: 840px; }
+#right { display: flex; flex-direction: column; gap: 6px; height: 840px; }
+.hdr { font-weight: 700; font-size: 14px; height: 20px; line-height: 20px; }
+#bar { display: flex; align-items: center; gap: 12px; height: 32px; }
+.sym { width: 32px; height: 32px; cursor: pointer; flex: none; }
+.sym.small { width: 28px; height: 28px; }
+.sym.off { opacity: .35; filter: grayscale(1); cursor: default; pointer-events: none; }
+#prog { width: 120px; height: 14px; border: 1px solid #999; background: #fff; flex: none; position: relative; }
+#progFill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: #21963f; }
+#progTxt { width: 40px; color: #4d4d4d; flex: none; }
+#status { flex: 1; text-align: right; color: #4d4d4d; font-size: 11px; overflow: hidden;
+          white-space: nowrap; text-overflow: ellipsis; }
+#sep { height: 1px; background: var(--line); }
+/* tabs */
+.tabs { display: flex; border-bottom: 1px solid #adadad; }
+.tab { padding: 3px 14px; border: 1px solid #adadad; border-bottom: none; margin-right: -1px;
+       background: #e1e1e1; cursor: pointer; user-select: none; }
+.tab.on { background: var(--bg); position: relative; top: 1px; }
+.page { border: 1px solid #adadad; border-top: none; padding: 6px; display: none; }
+.page.on { display: block; }
+/* input grid: three label/field pairs per row */
+.grid { display: grid; grid-template-columns: repeat(3, 100px 100px); column-gap: 4px; row-gap: 3px;
+        grid-auto-flow: column; }
+.lab { height: 22px; line-height: 22px; text-align: right; white-space: nowrap;
+       font: 14px "Times New Roman", Times, serif; padding-right: 2px; }
+.lab sub { font-size: 75%; }
+input.ed, select.ed { width: 100px; height: 22px; box-sizing: border-box; font: var(--fs) "Segoe UI", system-ui, sans-serif;
+                      border: 1px solid #a0a0a0; padding: 1px 4px; background: #fff; }
+input.ed.out { background: #e6e6e6; }
+input.chk { margin: 4px 0 0 0; width: 16px; height: 16px; justify-self: start; }
+#model { flex: 1; background: #fff; border: 1px solid #adadad; min-height: 0; }
+/* results */
+#rtabs + .page, #rpages .page { height: 760px; overflow: auto; }
+.rtools { display: flex; justify-content: flex-end; height: 28px; margin-bottom: 4px; }
+.ttl { font-weight: 700; margin: 6px 0 4px 0; }
+table.res { border-collapse: collapse; background: #fff; font-size: 13px; }
+table.res th { background: #ebebeb; font-weight: 700; border: 1px solid #c7c7c7; padding: 1px 4px; height: 20px; }
+table.res td { border: 1px solid #c7c7c7; padding: 1px 6px; height: 20px; text-align: center; white-space: nowrap; }
+table.res td:first-child { text-align: left; width: 285px; font-family: "Times New Roman", Times, serif; font-size: 14px; }
+table.res td.v { width: 105px; } table.res td.l { width: 80px; }
+.ex { color: #d90000; font-weight: 700; }
+.diag { width: 600px; height: 236px; margin-bottom: 6px; background: var(--bg); }
+#hint { color: #666; margin-top: 8px; }
+/* printing: report or diagrams only */
+#report, #printDiag { display: none; }
+@media print {
+  html, body { background: #fff; }
+  #app, #title, #foot { display: none !important; }
+  body.p-report #report { display: block; }
+  body.p-diag #printDiag { display: block; }
+}
+#report { font: 11pt "Times New Roman", Times, serif; color: #000; }
+#report h1 { font-size: 16pt; font-weight: 400; margin: 0 0 6pt 0; }
+#report h2 { font-size: 14pt; margin: 14pt 0 4pt 0; }
+#report p { margin: 0 0 6pt 0; }
+#report ul { margin: 0 0 6pt 0; padding-left: 18pt; }
+#report .pb { break-before: page; }
+#report table { border-collapse: collapse; margin: 4pt auto 10pt auto; font-size: 11pt; }
+#report caption { margin-bottom: 4pt; }
+#report th, #report td { padding: 1pt 8pt; text-align: center; }
+#report td:first-child, #report th:first-child { text-align: left; }
+#report thead tr { border-top: 1px solid #000; border-bottom: 1px solid #000; }
+#report tbody tr:last-child { border-bottom: 1px solid #000; }
+#report .fig { width: 160mm; margin: 6pt auto 2pt auto; }
+#report .cap { text-align: center; margin-bottom: 10pt; }
+#printDiag .dg { width: 170mm; height: 82mm; margin: 0 auto 6mm auto; }
+#title { text-align: center; font-size: 20px; font-weight: 600; margin: 14px 0 0 0; }
+#foot { text-align: center; padding: 6px 0 14px; font-size: var(--fs); color: #666; }
+</style>
+<style id="pageStyle"></style>
+</head>
+<body>
+<h1 id="title">Longitudinal Track-Bridge Interaction</h1>
+<div id="app">
+  <div id="left">
+    <div id="bar">
+      <span id="sRun" class="sym" title="Run: all load cases"></span>
+      <span id="sReset" class="sym" title="Reset: default input (Bryngeån), clears the results"></span>
+      <span id="sOpen" class="sym" title="Open: input fields from a JSON file"></span>
+      <span id="sSave" class="sym" title="Save: input fields to a JSON file"></span>
+      <span id="sReport" class="sym off" title="Print: report (A4), save it as PDF in the print dialog"></span>
+      <div id="prog"><div id="progFill"></div></div>
+      <span id="progTxt"></span>
+      <span id="status">Bryngeån (default input)</span>
+    </div>
+    <div id="sep"></div>
+    <div class="hdr">Input</div>
+    <div>
+      <div class="tabs" id="itabs"></div>
+      <div id="ipages"></div>
+    </div>
+    <div class="hdr">Model</div>
+    <div id="model"></div>
+  </div>
+  <div id="right">
+    <div class="hdr">Results</div>
+    <div>
+      <div class="tabs" id="rtabs"><span class="tab on" data-p="pTables">Tables</span><span class="tab" data-p="pDiag">Diagrams</span></div>
+      <div id="rpages">
+        <div class="page on" id="pTables">
+          <div class="rtools"><span id="sExport" class="sym small off" title="Export: tables and diagram data to Excel"></span></div>
+          <div id="tables"><p id="hint">Press Run to compute all load cases.</p></div>
+        </div>
+        <div class="page" id="pDiag">
+          <div class="rtools"><span id="sPrint" class="sym small off" title="Print: the three diagrams on one A4 page (save as PDF)"></span></div>
+          <div id="diags"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="foot">Last modified 2026-10-28</div>
+<div id="report"></div>
+<div id="printDiag"></div>
+<input type="file" id="fileIn" accept=".json,application/json" style="display:none">
+<script src="tbi_fem.js?v=2026-10-28g"></script>
+<script src="plots.js?v=2026-10-28g"></script>
+<script src="xlsx.js?v=2026-10-28g"></script>
+<script src="gui.js?v=2026-10-28g"></script>
+</body>
+</html>
