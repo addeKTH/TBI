@@ -46,7 +46,10 @@ input.chk { margin: 4px 0 0 0; width: 16px; height: 16px; justify-self: start; }
 #model { flex: 1; background: #fff; border: 1px solid #adadad; min-height: 0; }
 /* results */
 #rtabs + .page, #rpages .page { height: 760px; overflow: auto; }
-.rtools { display: flex; justify-content: flex-end; height: 28px; margin-bottom: 4px; }
+.rtools { display: flex; justify-content: flex-end; align-items: center; height: 28px; margin-bottom: 4px; }
+.rtools select.lc { width: 360px; margin-right: auto; }
+.loads { display: grid; grid-template-columns: 1fr 1.25fr; column-gap: 10px; margin-top: 4px; }
+.loads > div { min-height: 0; overflow: hidden; }
 .ttl { font-weight: 700; margin: 6px 0 4px 0; }
 table.res { border-collapse: collapse; background: #fff; font-size: 13px; }
 table.res th { background: #ebebeb; font-weight: 700; border: 1px solid #c7c7c7; padding: 1px 4px; height: 20px; }
@@ -78,7 +81,8 @@ table.res td.v { width: 105px; } table.res td.l { width: 80px; }
 #report tbody tr:last-child { border-bottom: 1px solid #000; }
 #report .fig { width: 160mm; margin: 6pt auto 2pt auto; }
 #report .cap { text-align: center; margin-bottom: 10pt; }
-#printDiag .dg { width: 170mm; height: 82mm; margin: 0 auto 6mm auto; }
+#printDiag .dg { width: 170mm; height: 78mm; margin: 0 auto 4mm auto; }   /* three per A4 page (247 mm) */
+#printDiag .pgb { break-before: page; }
 #title { text-align: center; font-size: 20px; font-weight: 600; margin: 14px 0 0 0; }
 #foot { text-align: center; padding: 6px 0 14px; font-size: var(--fs); color: #666; }
 </style>
@@ -110,27 +114,37 @@ table.res td.v { width: 105px; } table.res td.l { width: 80px; }
   <div id="right">
     <div class="hdr">Results</div>
     <div>
-      <div class="tabs" id="rtabs"><span class="tab on" data-p="pTables">Tables</span><span class="tab" data-p="pDiag">Diagrams</span></div>
+      <div class="tabs" id="rtabs"><span class="tab on" data-p="pTables">Tables</span><span class="tab" data-p="pDiag">Rail stress</span><span class="tab" data-p="pBSF">Bridge SF</span><span class="tab" data-p="pBD">Bridge disp</span></div>
       <div id="rpages">
         <div class="page on" id="pTables">
           <div class="rtools"><span id="sExport" class="sym small off" title="Export: tables and diagram data to Excel"></span></div>
           <div id="tables"><p id="hint">Press Run to compute all load cases.</p></div>
         </div>
         <div class="page" id="pDiag">
-          <div class="rtools"><span id="sPrint" class="sym small off" title="Print: the three diagrams on one A4 page (save as PDF)"></span></div>
+          <div class="rtools"><span id="sPrint" class="sym small off" title="Print: the three rail stress diagrams on one A4 page (TBI_rail_stress, save as PDF)"></span></div>
           <div id="diags"></div>
+        </div>
+        <div class="page" id="pBSF">
+          <div class="rtools"><select id="lcSF" class="ed lc" title="load case, as in the rail stress diagrams"><option value="1">Temperature</option><option value="2">Vertical traffic, braking/traction (envelopes)</option><option value="3" selected>Governing load combination</option></select>
+            <span id="sPrintSF" class="sym small off" title="Print: M, V and N of all three load cases (TBI_bridge_SF, three A4 pages, save as PDF)"></span></div>
+          <div id="bsfDiags"></div>
+        </div>
+        <div class="page" id="pBD">
+          <div class="rtools"><select id="lcD" class="ed lc" title="load case, as in the rail stress diagrams"><option value="1">Temperature</option><option value="2">Vertical traffic, braking/traction (envelopes)</option><option value="3" selected>Governing load combination</option></select>
+            <span id="sPrintD" class="sym small off" title="Print: u, w and rotation of all three load cases (TBI_bridge_disp, three A4 pages, save as PDF)"></span></div>
+          <div id="bdDiags"></div>
         </div>
       </div>
     </div>
   </div>
 </div>
-<div id="foot">Last modified 2026-10-28</div>
+<div id="foot">Last modified 2026-10-29</div>
 <div id="report"></div>
 <div id="printDiag"></div>
 <input type="file" id="fileIn" accept=".json,application/json" style="display:none">
-<script src="tbi_fem.js?v=2026-10-28h"></script>
-<script src="plots.js?v=2026-10-28h"></script>
-<script src="xlsx.js?v=2026-10-28h"></script>
-<script src="gui.js?v=2026-10-28h"></script>
+<script src="tbi_fem.js?v=2026-10-29b"></script>
+<script src="plots.js?v=2026-10-29b"></script>
+<script src="xlsx.js?v=2026-10-29b"></script>
+<script src="gui.js?v=2026-10-29b"></script>
 </body>
 </html>
