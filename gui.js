@@ -499,6 +499,7 @@ function onPrintBridge(kb) {
 }
 
 const fmtN = x => String(+Number(x).toPrecision(3)).replace('-', '−');
+const e6 = x => `${+(x * 1e6).toFixed(3)}·10<sup>−6</sup>`;     // thermal expansion as 12·10^-6
 function sci(x) {
     if (x === 0) return '0';
     const p = Math.floor(Math.log10(Math.abs(x)));
@@ -549,16 +550,17 @@ function buildReport() {
     h += `<h2 class="pb">Input</h2><p>${btyp} bridge, ${B.n_track} track(s), ${styp} track. In the model, the bridge length and the embankments ` +
          'are whole sleeper spacings (a rail seat at each deck end); ' + S('L', 'end') + ' is rounded to the deck element length and the spans are ' +
          'scaled to fit. <i>x</i> is measured from support 1.</p>';
-    const rowsB = [['Spans, <i>L</i> (model)', M.L.map(v => v.toFixed(2)).join(' + '), 'm'], ['Cross-section area, ' + S('A', 'b'), fmtN(B.A), 'm²'],
+    const rowsB = [['Spans, <i>L</i>', B.L.map(v => String(v)).join(' + '), 'm'],   // as given, as in figure 1 ['Cross-section area, ' + S('A', 'b'), fmtN(B.A), 'm²'],
         ['Second moment of area, ' + S('I', 'b'), fmtN(B.I), 'm⁴'], ["Young's modulus, " + S('E', 'b'), fmtN(B.E / 1e9), 'GPa'],
-        ['Thermal expansion, ' + S('α', 'b'), sci(B.alfa), '1/K'], ['Neutral axis to bearings, ' + S('e', 'b'), fmtN(B.e_b), 'm'],
-        ['Bearings to top of rail, <i>h</i>', fmtN(B.h), 'm'], ['Deck end beyond the end bearings, ' + S('L', 'end') + ' (model)', fmtN(M.Ls), 'm'],
+        ['Thermal expansion, ' + S('α', 'b'), e6(B.alfa), '1/K'], ['Neutral axis to bearings, ' + S('e', 'b'), fmtN(B.e_b), 'm'],
+        ['Bearings to top of rail, <i>h</i>', fmtN(B.h), 'm'], ['Deck end beyond the end bearings, ' + S('L', 'end'), String(B.L_end), 'm'],
         ['Deck temperature change, Δ' + S('T', 'N') + ', summer / winter', sgnT(B.dT[0]) + ' / ' + sgnT(B.dT[1]), '°C']];
     Kh.forEach((k, i) => rowsB.push(typeof k === 'number' && k === 0 ? [`Support ${i + 1}, longitudinal stiffness`, 'movable', '–']
         : typeof k === 'number' ? [`Support ${i + 1}, longitudinal stiffness, ` + S('K', 'h'), sci(k / 1e9), 'GN/m'] : [`Support ${i + 1}, longitudinal stiffness`, 'nonlinear', '–']));
     h += tab('Table 1: Bridge.', rowsB);
-    const rowsT = [['Rail cross-section area, 2 rails, ' + S('A', 'r'), sci(T.A), 'm²'], ['Rail second moment of area, 2 rails, ' + S('I', 'r'), sci(T.I), 'm⁴'],
-        ["Young's modulus, " + S('E', 'r'), fmtN(T.E / 1e9), 'GPa'], ['Thermal expansion, ' + S('α', 'r'), sci(T.alfa), '1/K'],
+    const rowsT = [['Rail cross-section area per rail, ' + S('A', 'r'), (T.A / 2 * 1e4).toFixed(1) + '·10<sup>−4</sup>', 'm²'],
+        ['Rail second moment of area per rail, ' + S('I', 'r'), (T.I / 2 * 1e8).toFixed(1) + '·10<sup>−8</sup>', 'm⁴'],
+        ["Young's modulus, " + S('E', 'r'), fmtN(T.E / 1e9), 'GPa'], ['Thermal expansion, ' + S('α', 'r'), e6(T.alfa), '1/K'],
         ['Top of rail to track slip centre, ' + S('e', 'r'), fmtN(T.e_r), 'm'], ['Sleeper spacing, ' + S('s', 'r'), fmtN(T.s_r), 'm'],
         ['Track on each embankment, ' + S('L', 'e'), fmtN(M.Le), 'm'], ['Elastic displacement, ' + S('u', '0') + ', summer / winter', fmtN(1e3 * T.u0[0]) + ' / ' + fmtN(1e3 * T.u0[1]), 'mm'],
         ['Resistance, unloaded track, ' + S('F', 'u') + ', summer / winter', fmtN(T.Fu[0] / 1e3) + ' / ' + fmtN(T.Fu[1] / 1e3), 'kN/m'],
@@ -569,7 +571,7 @@ function buildReport() {
     if (T.gap.length) rowsT.push(['Rail expansion joints, <i>x</i>', T.gap.map(fmtN).join(', '), 'm']);
     h += tab('Table 2: Track.', rowsT);
     const rowsL = [['Load classification factor, <i>α</i>', fmtN(Ld.alfa), '–']];
-    if (Ld.LM71) rowsL.push(['LM71, distributed load / locomotive over 6.4 m', '80 / 156.25', 'kN/m']);
+    if (Ld.LM71) rowsL.push(['LM71, distributed load / locomotive over 6.4 m', '80 / 156', 'kN/m']);
     if (Ld.SW) rowsL.push(['SW/0, 2 × 15 m, 5.3 m apart', '133', 'kN/m']);
     rowsL.push(['Braking, ' + S('q', 'lbk') + ' (max ' + S('Q', 'lbk') + ')', fmtN(Ld.qlbk / 1e3) + ' (' + fmtN(Ld.Qlbk_max / 1e3) + ')', 'kN/m (kN)']);
     rowsL.push(['Traction, ' + S('q', 'lak') + ' (max ' + S('Q', 'lak') + ')', fmtN(Ld.qlak / 1e3) + ' (' + fmtN(Ld.Qlak_max / 1e3) + ')', 'kN/m (kN)']);
