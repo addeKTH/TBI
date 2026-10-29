@@ -56,7 +56,10 @@ table.res th { background: #ebebeb; font-weight: 700; border: 1px solid #c7c7c7;
 table.res td { border: 1px solid #c7c7c7; padding: 1px 6px; height: 20px; text-align: center; white-space: nowrap; }
 table.res td:first-child { text-align: left; width: 285px; font-family: "Times New Roman", Times, serif; font-size: 14px; }
 table.res td.v { width: 105px; } table.res td.l { width: 80px; }
+table.res th.tl { text-align: left; padding-left: 6px; }   /* group title in the header row */
+table.res { margin-bottom: 10px; }
 .ex { color: #d90000; font-weight: 700; }
+.rn { display: inline-block; text-align: right; font-variant-numeric: tabular-nums; }   /* right-aligned numbers, centred block */
 .diag { width: 600px; height: 236px; margin-bottom: 6px; background: var(--bg); }
 #hint { color: #666; margin-top: 8px; }
 /* printing: report or diagrams only */
@@ -142,9 +145,9 @@ table.res td.v { width: 105px; } table.res td.l { width: 80px; }
 <div id="report"></div>
 <div id="printDiag"></div>
 <input type="file" id="fileIn" accept=".json,application/json" style="display:none">
-<script src="tbi_fem.js?v=2026-10-29d"></script>
-<script src="plots.js?v=2026-10-29d"></script>
-<script src="xlsx.js?v=2026-10-29d"></script>
-<script src="gui.js?v=2026-10-29d"></script>
+<script src="tbi_fem.js?v=2026-10-29g"></script>
+<script src="plots.js?v=2026-10-29g"></script>
+<script src="xlsx.js?v=2026-10-29g"></script>
+<script src="gui.js?v=2026-10-29g"></script>
 </body>
 </html>
