@@ -288,8 +288,8 @@ async function onRun() {
 const GROUPS = [['stress', 'Additional rail stress (MPa)'], ['disp', 'Displacements (mm)'], ['force', 'Longitudinal bearing forces (kN)']];
 function fmtVal(t, k, html) {
     const d = t.dec === undefined ? 1 : t.dec;                     // own decimals (e.g. deflection, whole mm)
-    const f = t.unit === 'kN' ? v => v.toFixed(0) : t.unit === 'MPa' ? v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(d)
-                               : v => (v < 0 ? '−' : '') + Math.abs(v).toFixed(d);
+    const f = t.unit === 'kN' ? v => v.toFixed(0) : t.unit === 'MPa' ? v => (v >= 0 ? '+' : '-') + Math.abs(v).toFixed(d)
+                               : v => (v < 0 ? '-' : '') + Math.abs(v).toFixed(d);   // hyphen as minus, en dash for empty values
     return t.val[k].map((v, i) => {
         const s = isNaN(v) ? '–' : f(v);
         return html && t.exceed[k][i] ? `<span class="ex">${s}</span>` : s;
@@ -300,10 +300,14 @@ function tablesHtml(o, report) {
     GROUPS.forEach(([g, title], gi) => {
         const rows = o.Table.filter(t => t.group === g);
         if (!rows.length) return;
-        h += report ? `<table><caption>Table ${gi + 4}: ${title}.</caption>` : `<div class="ttl">${title}</div><table class="res">`;
-        h += '<thead><tr><th></th><th>Limit</th><th>Summer</th><th>Winter</th></tr></thead><tbody>';
+        h += report ? `<table><caption>Table ${gi + 4}: ${title}.</caption>` : '<table class="res">';
+        h += `<thead><tr><th${report ? '>' : ` class="tl">${title}`}</th><th>Limit</th><th>Summer</th><th>Winter</th></tr></thead><tbody>`;   // GUI: title in the header row
+        // bearing forces: right-aligned among themselves, the block centred in the cell
+        let w = 0;
+        if (g === 'force') for (const t of rows) for (const k of [0, 1]) w = Math.max(w, fmtVal(t, k, false).length);
+        const val = (t, k) => (w ? `<span class="rn" style="width:${w}ch">${fmtVal(t, k, true)}</span>` : fmtVal(t, k, true));
         for (const t of rows)
-            h += `<tr><td>${t.name}</td><td class="l">${t.lim}</td><td class="v">${fmtVal(t, 0, true)}</td><td class="v">${fmtVal(t, 1, true)}</td></tr>`;
+            h += `<tr><td>${t.name}</td><td class="l">${t.lim}</td><td class="v">${val(t, 0)}</td><td class="v">${val(t, 1)}</td></tr>`;
         h += '</tbody></table>';
     });
     return h;
@@ -417,7 +421,7 @@ async function onExport() {
                 const v = rnd(t.val[k][i]);
                 return t.exceed[k][i] ? { v, s: 'red' } : v;
             };
-            rows.push([plain(t.name), t.lim.replace('−', '-').replace('–', '--'), cell(0, 0), cell(0, 1), cell(1, 0), cell(1, 1), t.unit]);
+            rows.push([plain(t.name), t.lim, cell(0, 0), cell(0, 1), cell(1, 0), cell(1, 1), t.unit]);
         }
         sheets.push({ name: nm[g], rows, widths: [44, 10, 11, 12, 11, 12, 6] });
     }
