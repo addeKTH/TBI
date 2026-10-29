@@ -15,8 +15,13 @@ Open `index.html` in a browser, or serve the folder:
 python -m http.server 8000      # then open http://localhost:8000
 ```
 
-The analysis runs on the main thread and yields after every load case, so the progress
-bar is updated during the run.
+The load cases are solved in parallel in Web Workers (one per processor core, kept
+between runs), in two rounds: temperature, vertical traffic sweeps, braking/traction and
+the intact rail first; then the broken rail and the load combinations, which restart from
+the saved temperature step. Without workers (e.g. `index.html` opened as a file) the same
+cases run on the main thread. The results are identical in both modes; the progress bar
+is updated about every 0.2 s. The bridge over Bryngeån takes about 0.1 s with 24 cores
+(32 analyses), with the locomotive stepped every 0.65 m about 0.3 s (260 analyses).
 
 ## The interface
 
