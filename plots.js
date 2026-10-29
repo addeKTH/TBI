@@ -1,7 +1,8 @@
 /* plots.js -------------------------------------------------------------------
-   SVG drawings of the TBI web app: the model sketch (port of PlotModel.m)
-   and the rail stress diagrams (port of PlotResults.m).
-   Andreas Andersson, 2026-10-28 (assisted by Claude)
+   SVG drawings of the TBI web app: the model sketch (port of PlotModel.m),
+   the rail stress diagrams (PlotResults.m), the deck section forces and
+   displacements (PlotBridge.m) and the load models of the Load tab.
+   Andreas Andersson, 2026-10-28, updated 2026-10-29 (assisted by Claude)
 
    USAGE:
      TBIPlot.model(out, W, H, fsz)     -> SVG string, W x H user units, font
@@ -9,6 +10,10 @@
      TBIPlot.diagram(out, i, W, H, fsz)-> SVG string of diagram i (0 temperature,
                                           1 vertical traffic and braking/traction,
                                           2 governing load combination)
+     TBIPlot.bridge(out, lc, iq, kind, W, H, fsz, title)
+                                       -> deck quantity iq (kind 'SF': M, V, N;
+                                          'disp': u, w, theta), load case lc 1..3
+     TBIPlot.loadModel('LM71' | 'SW', W, H, fsz) -> sketch with dimensions
    Text markup in labels: <i>..</i> italic, <sub>..</sub>, <sup>..</sup>.
    Points are converted to user units with 4/3 (96 dpi), as MATLAB on screen.
 ---------------------------------------------------------------------------*/
@@ -160,6 +165,22 @@ function fast(ax, x, y, s, a) {
     ax.line([x - 0.7 * s, x + 0.7 * s], [yg, yg], { lw: 1.2 });
     for (let xx = x - 0.6 * s; xx <= x + 0.7 * s + 1e-9; xx += 0.2 * s) ax.line([xx, xx - 0.18 * s], [yg, yg - a * 0.25 * s], { lw: 0.5 });
 }
+function lager(ax, typ, x, y, s, a, fsz) {
+    // bearing: roller (K_h = 0), fixed (K_h > 10 GN/m), or spring = fixed
+    // bearing on rollers held by a horizontal spring to the right (label K_h)
+    a = a || 1;
+    if (typ === 'roller') return stod(ax, x, y, s, a);
+    if (typ === 'fixed') return fast(ax, x, y, s, a);
+    stod(ax, x, y, s, a);
+    const xw = x + 1.7 * s, yw = y - a * 0.35 * s;                // spring at mid height of the bearing
+    fjader_h(ax, [x + 0.3 * s, xw], yw, 0.12 * s * a);
+    ax.line([xw, xw], [yw - a * s * 0.45, yw + a * s * 0.45], { lw: 1.0 });   // wall with hatching
+    for (let yy = yw - a * s * 0.4; yy <= yw + a * s * 0.41; yy += a * s * 0.2) ax.line([xw, xw + 0.2 * s], [yy, yy - a * 0.15 * s], { lw: 0.5 });
+    ax.text((x + xw) / 2, yw + a * 0.2 * s, sub('K', 'h'), { size: fsz - 4, ha: 'center', va: 'bottom' });
+}
+function bearingTypes(Kh) {
+    return Kh.map(k => (typeof k === 'number' && k === 0) ? 'roller' : (typeof k === 'number' && k > 10e9) ? 'fixed' : 'spring');
+}
 function mark(ax, x, y, a) {
     a = a || 1;
     ax.line(x, [y, y], { lw: 0.75 });
@@ -207,6 +228,8 @@ function model(out, W, H, fsz) {
     const Kh = Array.isArray(B.Kh) ? B.Kh : new Array(nsup).fill(B.Kh);
     const fixd = Kh.map(k => !(typeof k === 'number' && k === 0));
     const lbl = fixd.map(f => (f ? 'FL' : 'RL'));
+    const btyp = bearingTypes(Kh);
+    const xm0 = M.x0 || 0;                                         // x from support 1 (TBI_fem); 0 = from the deck end
 
     // a) whole model
     const ov = M.Ls, we = 7, wb = 30, x0 = we;
@@ -224,29 +247,29 @@ function model(out, W, H, fsz) {
     }
     for (let i = 0; i < nsup; i++) {
         a.line([xs[i], xs[i]], [yS, yB], { lw: 0.75 });
-        if (fixd[i]) fast(a, xs[i], yS, 1.0); else stod(a, xs[i], yS, 1.0);
+        lager(a, btyp[i], xs[i], yS, 1.0, 1, fsz);
         a.text(xs[i], yS - 1.15, `${i + 1} (${lbl[i]})`, { size: fsz - 2, ha: 'center', va: 'top' });
     }
-    mattv(a, xs[0] + 1.1, [yS, yB], sub('e', 'b'), fsz, 'right');
-    a.line([xs[0] + 0.2, xs[0] + 1.3], [yS, yS]);
-    const xo = xs[0] - sc * M.Ls;
-    for (const g of T.gap) {                                      // rail expansion joints
+    const xo = xs[0] - sc * M.Ls;                                  // left deck end in the drawing
+    for (const g0 of T.gap) {                                     // rail expansion joints (input from support 1)
+        const g = g0 + xm0;
         const xg = g < 0 ? xo + g * we / M.Le : g > M.Lb ? xe[1] + (g - M.Lb) * we / M.Le : xo + sc * g;
         a.line([xg - 0.35, xg + 0.35], [yR, yR], { lw: lw + 1.5, color: '#fff' });
         a.line([xg - 0.55, xg + 0.15], [yR + 0.12, yR + 0.12], { lw });
         a.line([xg - 0.15, xg + 0.55], [yR - 0.12, yR - 0.12], { lw });
         a.text(xg, yR + 0.35, 'REJ', { size: fsz - 2, ha: 'center', va: 'bottom' });
     }
-    a.line([xo, xo + 1.2 - 0.36], [-0.6, -0.6], { lw: 0.75 });      // x axis arrow
-    a.fill([xo + 1.2, xo + 1.2 - 0.36, xo + 1.2 - 0.36], [-0.6, -0.6 + 0.14, -0.6 - 0.14], '#000');
-    a.text(xo + 1.35, -0.6, '<i>x</i>', { size: fsz });
-    matt(a, [0, xe[0]], yM, M.Le.toFixed(1), fsz, true);
-    matt(a, [xe[1], xt], yM, M.Le.toFixed(1), fsz, true);
+    const xa = xm0 ? xs[0] : xo;                                   // x = 0 at support 1 (TBI_fem)
+    a.line([xa, xa + 1.2 - 0.36], [-0.6, -0.6], { lw: 0.75 });      // x axis arrow
+    a.fill([xa + 1.2, xa + 1.2 - 0.36, xa + 1.2 - 0.36], [-0.6, -0.6 + 0.14, -0.6 - 0.14], '#000');
+    a.text(xa + 1.35, -0.6, '<i>x</i>', { size: fsz });
+    matt(a, [0, xe[0]], yM, String(T.Le), fsz, true);              // lengths as given in the input
+    matt(a, [xe[1], xt], yM, String(T.Le), fsz, true);             // (the model rounds them, see tbi_fem.js)
     const xd = Array.from(new Set(xe.concat(xs).map(v => +v.toFixed(9)))).sort((p, q) => p - q);
     for (let i = 0; i < xd.length - 1; i++) {
-        const len = (xd[i + 1] - xd[i]) / sc;
-        let txt = len.toFixed(1);
-        if (xd.length > 11 || Math.abs(len - ov) < 1e-9) txt = '';
+        const j = i - (M.Ls > 1e-9 ? 1 : 0);                       // span number (first segment = L_end)
+        let txt = '';
+        if (j >= 0 && j < B.L.length && B.L.length <= 10) txt = String(B.L[j]);   // overhang, many spans: no value
         matt(a, [xd[i], xd[i + 1]], yM, txt, fsz - 2);
     }
     const pxa = a.sx;
@@ -260,8 +283,8 @@ function model(out, W, H, fsz) {
     const xs0 = xdk + Math.min(Ls, 3 * M.s_r) / M.s_r * ds;
     const xss = [-1, 0, 1, 2, 3].map(i => xdk + ds * i);
     const xL = xss[0] - 1.0, xRt = xss[4] + 1.6;
-    const xeb = xss[0] - 0.7, xh = xeb - 5.5;
-    const b = new Ax(svg, [0.00, 0.00, 0.54, 0.60], [xh - 5.0, xRt + 3.2], [yS - 2.5, yR + 1.4], false);
+    const xeb = xss[0] - 1.9, xh = xeb - 5.5;                       // e_b, e_r left of the embankment spring, h further left
+    const b = new Ax(svg, [0.00, 0.00, 0.54, 0.60], [xh - 5.0, xRt + 3.2], [yS - 3.3, yR + 1.4], false);
     const asp = b.sx / b.sy, sb = pxa / b.sx;
     b.line([xL, xRt], [yR, yR], { lw });
     b.line([xdk, xRt], [yB, yB], { lw: 4 });
@@ -277,22 +300,28 @@ function model(out, W, H, fsz) {
     b.text(xss[4] + 1.05, yT, sub('k', 't,h'), { size: fsz });
     b.text(xss[4] + 1.05, (yB + yT) / 2, sub('k', 't,v'), { size: fsz });
     b.line([xs0, xs0], [yB, yS], { lw: 0.75 });
-    if (fixd[0]) fast(b, xs0, yS, sb, asp); else stod(b, xs0, yS, sb, asp);
+    lager(b, btyp[0], xs0, yS, sb, asp, fsz);
     b.text(xs0, yS - asp * 1.3 * sb, `support 1 (${lbl[0]})`, { size: fsz, ha: 'center', va: 'top' });
     matt(b, [xss[1], xss[2]], yR + 0.6, sub('s', 'r') + ' = ' + M.s_r.toFixed(2), fsz, false, asp);
     mattv(b, xeb, [yS, yB], sub('e', 'b') + ' = ' + B.e_b.toFixed(2), fsz, 'left', asp);
     mattv(b, xeb, [yT, yR], sub('e', 'r') + ' = ' + T.e_r.toFixed(2), fsz, 'left', asp);
     mattv(b, xh, [yS, yR], '<i>h</i> = ' + B.h.toFixed(2), fsz, 'left', asp);
-    b.line([xh - 0.2, xs0 - 0.35], [yS, yS]);
-    b.line([xeb - 0.2, xss[0] - 0.3], [yB, yB], { dash: ':' });
-    b.line([xeb - 0.2, xss[0] - 0.1], [yT, yT], { dash: ':' });
-    b.line([xh - 0.2, xL], [yR, yR]);
-    if (Ls > 1e-9) {
+    const gp = 0.6;                                                // gap between extension lines and the model
+    b.line([xh - 0.2, xs0 - 0.45 * sb - gp], [yS, yS]);           // extension lines: bearing,
+    b.line([xeb - 0.2, xss[0] - 0.2 - gp], [yB, yB], { dash: ':' });   // neutral axis,
+    b.line([xeb - 0.2, xss[0] - gp], [yT, yT], { dash: ':' });     // slip centre,
+    b.line([xh - 0.2, xL - gp], [yR, yR]);                         // top of rail
+    if (Ls > 1e-9) {                                               // L_end: deck end to bearing 1 (value as given)
         const yL = yS + 0.45 * (yB - yS);
         b.line([xdk, xdk], [yB - asp * 0.25, yL - asp * 0.3]);
         matt(b, [xdk, xs0], yL, '', fsz, false, asp);
-        b.text(xs0 + 0.4, yL, sub('L', 'end') + ' = ' + Number(Ls.toPrecision(3)), { size: fsz });
+        b.text(xs0 + 0.4, yL, sub('L', 'end') + ' = ' + String(B.L_end), { size: fsz });
     }
+    const yx = yS - 2.95, xax = xm0 ? xs0 : xdk;                   // x axis from support 1 (x = 0), below the label
+    b.line([xax, xax], [yx - asp * 0.25, yx + asp * 0.25]);
+    b.line([xax, xax + 1.6 - 0.36], [yx, yx], { lw: 0.75 });
+    b.fill([xax + 1.6, xax + 1.6 - 0.36, xax + 1.6 - 0.36], [yx, yx + asp * 0.14, yx - asp * 0.14], '#000');
+    b.text(xax + 1.75, yx, '<i>x</i>', { size: fsz });
 
     // c) track shear resistance
     const u0 = T.u0.map(v => 1e3 * v), Fu = T.Fu.map(v => v / 1e3), Fl = T.Fl / 1e3;
@@ -348,7 +377,7 @@ function ylimits(arrs, ymin) {
 
 function diagram(out, k, W, H, fsz, title) {
     const T = out.Track, M = out.Model, Lim = out.inp.Limits, Ld = out.inp.Load;
-    const x = T.x, xl = [-60, M.Lb + 60], col = ['#ff0000', '#0000ff'];
+    const x = T.x, xl = [-60 - (M.x0 || 0), M.Lb + 60 - (M.x0 || 0)], col = ['#ff0000', '#0000ff'];   // x from support 1
     const lim = [Lim.sig_emb[0], Lim.sig_emb[1]];
     const svg = new Svg(W, H);
     const fs = fsz, cid = 'clip' + (++clipId);
@@ -420,6 +449,126 @@ function diagram(out, k, W, H, fsz, title) {
     return svg.toString();
 }
 
+// ---------------------------------------------------------------- BRIDGE (PlotBridge.m)
+// one quantity iq (0..2) of the deck section forces (kind 'SF': M, V, N) or
+// displacements ('disp': u, w, theta) for load case lc (1 temperature,
+// 2 vertical traffic and braking/traction envelopes, 3 governing combination
+// and its temperature step), at the rail seats along the bridge
+const BQ = { SF: ['M', 'V', 'N'], disp: ['u', 'w', 'th'] };
+const BY = { SF: ['<i>M</i> (MNm)', '<i>V</i> (MN)', '<i>N</i> (MN)'], disp: ['<i>u</i> (mm)', '<i>w</i> (mm)', '<i>θ</i> (mrad)'] };
+const BT = { SF: ['Bending moment (sagging positive)', 'Shear force', 'Axial force (tension positive)'],
+             disp: ['Longitudinal displacement (track slip centre)', 'Vertical displacement (up positive)', 'Rotation (anticlockwise positive)'] };
+const LCN = ['Temperature', 'Vertical traffic, braking/traction (envelopes)', 'Governing load combination'];
+
+function bridge(out, lc, iq, kind, W, H, fsz, title) {
+    const Bk = out.Bridge, M = out.Model, Ld = out.inp.Load, q = BQ[kind][iq];
+    const F = kind === 'disp' ? Bk.D : Bk.F, x = Bk.xF || Bk.x;
+    const x0 = M.x0 || 0, xl = [-x0 - 0.03 * M.Lb, M.Lb - x0 + 0.03 * M.Lb], col = ['#ff0000', '#0000ff'];
+    const svg = new Svg(W, H), fs = fsz, cid = 'clip' + (++clipId);
+    const top = title ? 1.9 * fs * PT : 0.6 * fs * PT;
+    const left = 4.2 * fs * PT, right = 0.6 * fs * PT, bottom = 3.0 * fs * PT;
+    const pos = [left / W, bottom / H, (W - left - right) / W, (H - top - bottom) / H];
+    const L = [];                                                  // [{y, dash, lw, s}]
+    for (let s = 0; s < 2; s++) {
+        if (lc === 1) {
+            const e = F.temp[q];
+            L.push({ y: e.min[s], lw: 1, s });
+            if (e.max[s].some((v, i) => v !== e.min[s][i])) L.push({ y: e.max[s], lw: 1, s });
+        } else if (lc === 2) {
+            if (Ld.LM71) for (const y of [F.LM71[q].min[s], F.LM71[q].max[s]]) L.push({ y, dash: '--', lw: 0.5, s });
+            if (Ld.SW)   for (const y of [F.SW[q].min[s], F.SW[q].max[s]]) L.push({ y, dash: '-.', lw: 0.5, s });
+            L.push({ y: F.brk[q].min[s].map((v, i) => Math.min(v, F.acc[q].min[s][i])), lw: 1, s });
+            L.push({ y: F.brk[q].max[s].map((v, i) => Math.max(v, F.acc[q].max[s][i])), lw: 1, s });
+        } else {
+            L.push({ y: F.comb.govTemp[q][s], dash: '--', lw: 0.5, s });
+            L.push({ y: F.comb.gov[q][s], lw: 1, s });
+        }
+    }
+    let lo = 0, hi = 0;                                            // y range with 10 % margin, zero included
+    for (const l of L) for (const v of l.y) if (isFinite(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+    const dd = Math.max(hi - lo, 1e-3), yl = [lo - 0.1 * dd, hi + 0.1 * dd];
+    const ax = new Ax(svg, pos, xl, yl, false);
+    const [bx, by, bw, bh] = ax.box;
+    svg.add(`<defs><clipPath id="${cid}"><rect x="${f2(bx)}" y="${f2(by)}" width="${f2(bw)}" height="${f2(bh)}"/></clipPath></defs>`);
+    ax.line(xl, [0, 0], { lw: 0.5 });                              // zero line
+    for (const xs of Bk.xsup) ax.line([xs, xs], yl, { color: '#808080', dash: ':' });   // supports
+    for (const l of L) ax.line(x, l.y, { color: col[l.s], dash: l.dash, lw: l.lw, clip: cid });
+    axesFrame(svg, ax, xl, yl, fs, BY[kind][iq], title, col, niceStep(yl[1] - yl[0], 6));
+    return svg.toString();
+}
+
+function axesFrame(svg, ax, xl, yl, fs, ylab, title, col, ystep) {
+    // box, ticks and labels, title, legend summer/winter (as diagram)
+    const [bx, by, bw, bh] = ax.box;
+    svg.add(`<rect x="${f2(bx)}" y="${f2(by)}" width="${f2(bw)}" height="${f2(bh)}" fill="none" stroke="#000" stroke-width="${f2(0.5 * PT)}"/>`);
+    const tl = 0.01 * Math.max(bw, bh), xstep = niceStep(xl[1] - xl[0], 10);
+    for (let v = Math.ceil(xl[0] / xstep) * xstep; v <= xl[1] + 1e-9; v += xstep) {
+        const px = ax.X(v);
+        svg.add(`<path d="M${f2(px)} ${f2(by + bh)}v${f2(-tl)}M${f2(px)} ${f2(by)}v${f2(tl)}" stroke="#000" stroke-width="${f2(0.5 * PT)}"/>`);
+        svg.add(textSvg(px, by + bh + 0.35 * fs * PT, fmtTick(v), { size: fs - 1, ha: 'center', va: 'top' }));
+    }
+    for (let v = Math.ceil(yl[0] / ystep) * ystep; v <= yl[1] + 1e-9; v += ystep) {
+        const py = ax.Y(v);
+        svg.add(`<path d="M${f2(bx)} ${f2(py)}h${f2(tl)}M${f2(bx + bw)} ${f2(py)}h${f2(-tl)}" stroke="#000" stroke-width="${f2(0.5 * PT)}"/>`);
+        svg.add(textSvg(bx - 0.35 * fs * PT, py, fmtTick(v), { size: fs - 1, ha: 'right' }));
+    }
+    svg.add(textSvg(bx + bw / 2, by + bh + 1.6 * fs * PT, '<i>x</i> (m)', { size: fs, ha: 'center', va: 'top' }));
+    svg.add(`<g transform="translate(${f2(bx - 3.2 * fs * PT)} ${f2(by + bh / 2)}) rotate(-90)">` +
+            textSvg(0, 0, ylab, { size: fs, ha: 'center' }) + '</g>');
+    if (title) svg.add(textSvg(bx + bw / 2, by - 0.5 * fs * PT, title, { size: fs, ha: 'center', va: 'bottom' }));
+    const lx = bx + bw - 6.2 * fs * PT, ly = by + 0.9 * fs * PT;
+    ['summer', 'winter'].forEach((n, i) => {
+        const yy = ly + i * 1.2 * fs * PT;
+        svg.add(`<path d="M${f2(lx)} ${f2(yy)}h${f2(2.2 * fs * PT)}" stroke="${col[i]}" stroke-width="${f2(1 * PT)}"/>`);
+        svg.add(textSvg(lx + 2.6 * fs * PT, yy, n, { size: fs - 1 }));
+    });
+}
+
+// ---------------------------------------------------------------- LOAD MODELS (TBI_GUI.m, Load tab)
+// LM71 as in the analysis: 80 kN/m unlimited and the locomotive 4 x 250 kN /
+// 6.4 m = 156 kN/m; SW/0: 2 x 15 m of 133 kN/m, 5.3 m apart; loads in red
+function loadModel(which, W, H, fsz) {
+    const svg = new Svg(W, H), rc = '#d90000';
+    const pil = (ax, x, y0, hw, hh) => {                           // vertical load arrow from y0 down to 0
+        ax.line([x, x], [y0, hh], { color: rc, lw: 0.75 });
+        ax.fill([x - hw, x, x + hw], [hh, 0, hh], rc);
+    };
+    const dim = (ax, xs, y, txt) => {
+        const dx = 0.012 * (ax.xlim[1] - ax.xlim[0]);
+        ax.line([xs[0], xs[xs.length - 1]], [y, y]);
+        for (const x of xs) { ax.line([x - dx, x + dx], [y - 0.1, y + 0.1], { lw: 0.75 }); ax.line([x, x], [y - 0.15, y + 0.3]); }
+        txt.forEach((t, i) => ax.text((xs[i] + xs[i + 1]) / 2, y - 0.12, t, { size: fsz - 1, ha: 'center', va: 'top' }));
+    };
+    const SF = "'Segoe UI', system-ui, sans-serif";
+    if (which === 'LM71') {
+        const ax = new Ax(svg, [0, 0, 1, 1], [-3.5, 9.9], [-1.15, 2.45], false), hq = 0.55, hp = hq * 156 / 80;
+        ax.line([-3.2, 9.6], [0, 0], { lw: 1 });
+        for (const xr of [[-3.2, 0], [6.4, 9.6]]) {
+            ax.line(xr, [hq, hq], { color: rc, lw: 0.75 });
+            for (let i = 0; i < 4; i++) pil(ax, xr[0] + i * (xr[1] - xr[0]) / 3, hq, 0.12, 0.12);
+        }
+        ax.line([0, 6.4], [hp, hp], { color: rc, lw: 0.75 });
+        for (let i = 0; i < 7; i++) pil(ax, i * 6.4 / 6, hp, 0.12, 0.12);
+        ax.text(3.2, hp + 0.08, '156 kN/m', { size: fsz, ha: 'center', va: 'bottom' });
+        ax.text(-1.6, hq + 0.08, '80 kN/m', { size: fsz, ha: 'center', va: 'bottom' });
+        ax.text(8.0, hq + 0.08, '80 kN/m', { size: fsz, ha: 'center', va: 'bottom' });
+        ax.text(9.6, hp + 0.45, 'unlimited', { size: fsz - 1, ha: 'right', va: 'bottom', color: '#595959' });
+        svg.add(`<text x="${f2(ax.X(-3.4))}" y="${f2(ax.Y(hp + 0.45) - 2)}" font-size="${f2((fsz + 1) * PT)}" font-weight="bold" font-family="${SF}">LM71</text>`);
+        dim(ax, [0, 6.4], -0.45, ['6.4']);
+    } else {
+        const ax = new Ax(svg, [0, 0, 1, 1], [-2.5, 37.8], [-1.15, 2.45], false), hq = 0.75;
+        ax.line([-2, 37.3], [0, 0], { lw: 1 });
+        for (const xr of [[0, 15], [20.3, 35.3]]) {
+            ax.line(xr, [hq, hq], { color: rc, lw: 0.75 });
+            for (let i = 0; i < 7; i++) pil(ax, xr[0] + i * (xr[1] - xr[0]) / 6, hq, 0.35, 0.12);
+            ax.text((xr[0] + xr[1]) / 2, hq + 0.08, '133 kN/m', { size: fsz, ha: 'center', va: 'bottom' });
+        }
+        svg.add(`<text x="${f2(ax.X(-2.3))}" y="${f2(ax.Y(1.7) - 2)}" font-size="${f2((fsz + 1) * PT)}" font-weight="bold" font-family="${SF}">SW/0</text>`);
+        dim(ax, [0, 15, 20.3, 35.3], -0.45, ['15', '5.3', '15']);
+    }
+    return svg.toString();
+}
+
 function niceStep(range, n) {
     const raw = range / n, p = Math.pow(10, Math.floor(Math.log10(raw)));
     for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= raw) return m * p;
@@ -427,5 +576,5 @@ function niceStep(range, n) {
 }
 const fmtTick = v => (Math.abs(v) < 1e-9 ? '0' : (v < 0 ? '−' : '') + String(+Math.abs(v).toFixed(6)));
 
-root.TBIPlot = { model, diagram, DTITLE, dtitle, textSvg, markup };
+root.TBIPlot = { model, diagram, bridge, loadModel, BT, LCN, DTITLE, dtitle, textSvg, markup };
 })(typeof window !== 'undefined' ? window : globalThis);
