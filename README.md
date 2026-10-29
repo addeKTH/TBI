@@ -31,12 +31,19 @@ is updated about every 0.2 s. The bridge over Bryngeån takes about 0.1 s with 2
 | Reset | default input (the bridge over Bryngeån), clears the results |
 | Open / Save | input fields as JSON, same format as `TBI_GUI.m` |
 | Print | report on A4 (basis, model, input, results, diagrams); choose "Save as PDF" in the print dialog |
-| Tables, Excel symbol | tables and diagram data as `.xlsx`; values outside the limits in bold red |
-| Diagrams, print symbol | the three rail stress diagrams on one A4 page |
+| Tables, Excel symbol | tables and diagram data as `.xlsx` (sheets Rail stress, Displacements, Bearing forces, Rail stress diagram, Bridge SF diagram, Bridge disp diagram); values outside the limits in bold red, deck ends and bearings in bold |
+| Rail stress, print symbol | the three rail stress diagrams on one A4 page (`TBI_rail_stress`) |
+| Bridge SF, print symbol | deck M, V and N for the chosen load case; prints all three load cases on three A4 pages (`TBI_bridge_SF`) |
+| Bridge disp, print symbol | deck u, w and rotation, as Bridge SF (`TBI_bridge_disp`) |
 
 Input tabs Bridge, Track, Load and Limits. Vectors are typed with spaces, e.g. `30 40 30`.
-`K_h` is filled in when the number of spans changes (fixed bearing at the right end),
-`L_end` is rounded to a multiple of `s_r/2` as in the model, and the deck temperature
+`K_h` is filled in when the number of spans changes (fixed bearing at the right end).
+The bearings are drawn by `K_h`: roller for 0, fixed above 10 GN/m, otherwise roller with
+a spring. The Load tab shows LM71 and SW/0 with dimensions. x = 0 at support 1 in input
+(REJ position), results and diagrams. The model uses deck elements of `s_r/6`, rounds
+`L_end` and the bearing positions to that length and scales the spans so that the deck is
+a whole number of sleeper spacings; the input fields show the given values. Deck results
+are given at the rail seats. The deck temperature
 change follows EN 1991-1-5 6.1.3 and Figure 6.1 (AC:2009) unless "direct" is chosen.
 
 ## Files
@@ -46,16 +53,17 @@ change follows EN 1991-1-5 6.1.3 and Figure 6.1 (AC:2009) unless "direct" is cho
 | `index.html` | page layout, styles, print layout |
 | `gui.js` | input fields, events, run, tables, Save/Open, Excel export, report |
 | `tbi_fem.js` | defaults, FE solver (`TBI.solve`), complete analysis (`TBI.analysis`), summary table |
-| `plots.js` | SVG drawings: model sketch and rail stress diagrams |
+| `plots.js` | SVG drawings: model sketch, load models, rail stress and deck diagrams |
 | `xlsx.js` | minimal Excel writer with bold and red bold cells |
 
 ## Verification
 
-The solver was compared with `TBI_fem.m` (MATLAB R2025b, 2026-10-28) in three cases:
-the bridge over Bryngeån; three spans with a rail
-expansion joint, an end screen and a nonlinear support; two tracks, ballastless,
-'shifted' loaded resistance and moving loads. Same number of analyses; largest
-differences 1e-9 MPa (rail stress), 1e-4 mm (displacements, rail break gap) and
-1e-8 kN (bearing forces).
+The analysis was compared with `TBI_fem.m` (MATLAB R2025b, 2026-10-29) in four cases
+(`test/make_reference.m` writes `reference.json`, `test/test.html` compares): the bridge
+over Bryngeån; three spans with a rail expansion joint, an end screen and a nonlinear
+support; two tracks, ballastless, 'shifted' loaded resistance and moving loads; a 70 m
+span with `nDeck` 4 and equal unloaded and loaded resistance. Same number of analyses;
+largest differences below 1e-6 in the tables, envelopes, rail break gap, coordinates,
+deck forces and displacements and the largest deflection per span.
 
 Andreas Andersson, KTH, 2026.
