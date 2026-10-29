@@ -47,7 +47,7 @@ input.chk { margin: 4px 0 0 0; width: 16px; height: 16px; justify-self: start; }
 /* results */
 #rtabs + .page, #rpages .page { height: 760px; overflow: auto; }
 .rtools { display: flex; justify-content: flex-end; align-items: center; height: 28px; margin-bottom: 4px; }
-.rtools select.lc { width: 360px; margin-right: auto; }
+.rtools select.lc { width: 540px; margin-right: auto; }
 .loads { display: grid; grid-template-columns: 1fr 1.25fr; column-gap: 10px; margin-top: 4px; }
 .loads > div { min-height: 0; overflow: hidden; }
 .ttl { font-weight: 700; margin: 6px 0 4px 0; }
@@ -125,12 +125,12 @@ table.res td.v { width: 105px; } table.res td.l { width: 80px; }
           <div id="diags"></div>
         </div>
         <div class="page" id="pBSF">
-          <div class="rtools"><select id="lcSF" class="ed lc" title="load case, as in the rail stress diagrams"><option value="1">Temperature</option><option value="2">Vertical traffic, braking/traction (envelopes)</option><option value="3" selected>Governing load combination</option></select>
+          <div class="rtools"><select id="lcSF" class="ed lc" title="load case, as in the rail stress diagrams"><option value="1">Temperature, envelope</option><option value="2">Vertical traffic (dashed), braking/traction (solid), envelopes</option><option value="3" selected>Governing load combination (solid), temperature step (dashed)</option></select>
             <span id="sPrintSF" class="sym small off" title="Print: M, V and N of all three load cases (TBI_bridge_SF, three A4 pages, save as PDF)"></span></div>
           <div id="bsfDiags"></div>
         </div>
         <div class="page" id="pBD">
-          <div class="rtools"><select id="lcD" class="ed lc" title="load case, as in the rail stress diagrams"><option value="1">Temperature</option><option value="2">Vertical traffic, braking/traction (envelopes)</option><option value="3" selected>Governing load combination</option></select>
+          <div class="rtools"><select id="lcD" class="ed lc" title="load case, as in the rail stress diagrams"><option value="1">Temperature, envelope</option><option value="2">Vertical traffic (dashed), braking/traction (solid), envelopes</option><option value="3" selected>Governing load combination (solid), temperature step (dashed)</option></select>
             <span id="sPrintD" class="sym small off" title="Print: u, w and rotation of all three load cases (TBI_bridge_disp, three A4 pages, save as PDF)"></span></div>
           <div id="bdDiags"></div>
         </div>
@@ -142,9 +142,9 @@ table.res td.v { width: 105px; } table.res td.l { width: 80px; }
 <div id="report"></div>
 <div id="printDiag"></div>
 <input type="file" id="fileIn" accept=".json,application/json" style="display:none">
-<script src="tbi_fem.js?v=2026-10-29b"></script>
-<script src="plots.js?v=2026-10-29b"></script>
-<script src="xlsx.js?v=2026-10-29b"></script>
-<script src="gui.js?v=2026-10-29b"></script>
+<script src="tbi_fem.js?v=2026-10-29c"></script>
+<script src="plots.js?v=2026-10-29c"></script>
+<script src="xlsx.js?v=2026-10-29c"></script>
+<script src="gui.js?v=2026-10-29c"></script>
 </body>
 </html>
