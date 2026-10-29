@@ -48,7 +48,7 @@ const FIELDS = [
  ['Track','Fl',     S('F','l') + ' (kN/m)',         'edit','60',        'resistance of loaded track'],
  ['Track','Kv',     S('k','v') + ' c / u (MN/m)',   'edit','80 4',      'vertical stiffness per sleeper, 2 rails, compression / uplift'],
  ['Track','gap',    'REJ at <i>x</i> (m)',         'edit','',          'rail expansion joints, x from support 1; empty = CWR'],
- ['Track','dTR',    'Δ' + S('T','R') + ' s / w (K)','edit','0 0',       'rail temperature change, summer / winter (0 0 for CWR)'],
+ ['Track','dTR',    'Δ' + S('T','R') + ' s / w (K)','edit','',          'rail temperature change, summer / winter; empty: 0 0 for CWR, +50 -50 with rail expansion joints (UIC 774-3)'],
  ['Load','alfa',    '<i>α</i>',                    'edit','1.33',      'load classification factor'],
  ['Load','LM71',    'LM71',                        'check',true,       'LM71 on the whole bridge, locomotive from the movable bearing'],
  ['Load','SW',      'SW/0',                        'check',false,      'SW/0 (continuous decks)'],
@@ -220,7 +220,8 @@ function buildInp() {
     inp.Track = { type: P.ttype.value, A: 2 * num('Ar') * 1e-4, I: 2 * num('Ir') * 1e-8, E: 210e9, alfa: 12e-6,
                   e_r: num('er'), s_r: num('sr'), Le: num('Le'), u0: vec('u0').map(v => v * 1e-3),
                   Fu: vec('Fu').map(v => v * 1e3), Fl: num('Fl') * 1e3, Kv: kv[0] * 1e6, Kv_up: kv[kv.length - 1] * 1e6,
-                  dT: vec('dTR'), dT_brk: num('dTbrk'), gap: vec('gap') };
+                  dT_brk: num('dTbrk'), gap: vec('gap') };
+    if (vec('dTR').length) inp.Track.dT = vec('dTR');            // empty: 0 0 (CWR) or +50 -50 (REJ)
     inp.Load = { alfa: num('alfa'), LM71: P.LM71.checked, SW: P.SW.checked, dxPos: num('dxPos'),
                  qlbk: num('qlbk') * 1e3, Qlbk_max: num('Qlbk') * 1e3, qlak: num('qlak') * 1e3, Qlak_max: num('Qlak') * 1e3 };
     inp.Limits = { sig_br: vec('sigbr'), sig_emb: vec('sigemb'), dB: num('dB'), dH: num('dH'), dV: num('dV'),
@@ -307,7 +308,12 @@ function tablesHtml(o, report) {
     });
     return h;
 }
+function lcOptions() {
+    // load cases in the Bridge dropdowns, with the line styles (SW/0 after a run)
+    for (const id of BSEL) [...$(id).options].forEach(o => { o.textContent = TBIPlot.lcname(out, Number(o.value)); });
+}
 function showResults() {
+    lcOptions();
     $('tables').innerHTML = tablesHtml(out, false);
     drawDiagrams(); drawBridge(0); drawBridge(1);
 }
@@ -329,7 +335,7 @@ function drawDiagrams() {
 // ---------------------------------------------------------------- reset, save, open
 function onReset() {
     for (const d of FIELDS) if (d.kind !== 'out' && d.kind !== 'blank') setv(d.key, d.val);
-    out = null; enable(false);
+    out = null; enable(false); lcOptions();
     $('tables').innerHTML = '<p id="hint">Press Run to compute all load cases.</p>';
     $('diags').innerHTML = '';  $('bsfDiags').innerHTML = '';  $('bdDiags').innerHTML = '';
     onChange('');
@@ -484,7 +490,7 @@ function onPrintDiagrams() {
 function bridgePrintHtml(kb) {
     // deck forces (kb 0) or displacements (kb 1) of the three load cases, one A4 page each
     return [1, 2, 3].map(lc => (lc > 1 ? '<div class="pgb"></div>' : '') + [0, 1, 2].map(i =>
-        `<div class="dg">${TBIPlot.bridge(out, lc, i, BK[kb], 640, 310, 10, TBIPlot.BT[BK[kb]][i] + ', ' + TBIPlot.LCN[lc - 1])}</div>`).join('')).join('');
+        `<div class="dg">${TBIPlot.bridge(out, lc, i, BK[kb], 640, 310, 10, [TBIPlot.BT[BK[kb]][i], TBIPlot.lcname(out, lc)])}</div>`).join('')).join('');
 }
 function onPrintBridge(kb) {
     if (!out) return;
@@ -531,7 +537,10 @@ function buildReport() {
          (vl.length ? `<li>${vl.join(', ')};</li>` : '') +
          `<li>braking over ${fmtN(out.LoadPos.Lbrk)} m and traction over ${fmtN(out.LoadPos.Lacc)} m from either end, both directions` +
          (B.n_track === 2 ? ', braking on track 1 with traction on track 2' : '') + ';</li>' +
-         '<li>load combination: temperature (step 1), vertical traffic with braking or traction (step 2);</li>' +
+         '<li>load combination: temperature (step 1), vertical traffic with braking or traction (step 2), and the same without temperature ' +
+         '(at neutral temperature the track resistance has not yielded); envelope of both;</li>' +
+         (out.Track.rej ? '<li>with rail expansion joints: rail temperature included, temperature given as total rail stress (the additional ' +
+             'stress is not defined at a joint); the additional rail stress of the load combination only without temperature;</li>' : '') +
          `<li>rail break, winter only: deck ${sgnT(rb.dT_B)} °C, rail ${sgnT(rb.dT_R)} °C, both rails of one track broken at the bridge ends and at the largest rail tension.</li></ul>` +
          `<p>In total ${out.Info.nRun} analyses. Input in tables 1–3, results in tables 4–6 and figures 2–4.</p>`;
     h += `<div class="fig">${TBIPlot.model(out, 1150, 600, 16)}</div><div class="cap">Figure 1: 2D FE model: whole model (top), detail at support 1, ` +
@@ -572,8 +581,12 @@ function buildReport() {
     h += tablesHtml(out, true);
     // diagrams
     const cap = ['Additional rail stress, temperature.', 'Additional rail stress, vertical traffic (dashed) and braking/traction (solid), envelope.',
-                 'Additional rail stress, governing load combination (solid) and its temperature step (dashed).'];
+                 'Additional rail stress, governing load combination with or without temperature (solid) and its temperature step (dashed).'];
     if (Ld.SW) cap[1] = 'Additional rail stress, LM71 (dashed), SW/0 (dash-dot) and braking/traction (solid), envelope.';
+    if (out.Track.rej) {
+        cap[0] = 'Total rail stress, temperature; dotted: fully restrained rail.';
+        cap[2] = 'Additional rail stress, governing load combination without temperature.';
+    }
     h += '<div class="pb"></div>' + [0, 1, 2].map(i =>
         `<div class="fig" style="height:64mm">${TBIPlot.diagram(out, i, 700, 280, 11, '')}</div><div class="cap">Figure ${i + 2}: ${cap[i]}</div>`).join('');
     $('report').innerHTML = h;
