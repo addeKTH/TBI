@@ -1233,7 +1233,7 @@ function table(out) {
         }
         return [mn === Infinity ? NaN : mn, mx === -Infinity ? NaN : mx];
     });
-    const sl = l => (l[0] >= 0 ? '+' : '−') + Math.abs(l[0]) + ' / ' + (l[1] >= 0 ? '+' : '−') + Math.abs(l[1]);
+    const sl = l => (l[0] >= 0 ? '+' : '-') + Math.abs(l[0]) + ' / ' + (l[1] >= 0 ? '+' : '-') + Math.abs(l[1]);   // hyphen as minus
     const add = (group, name, unit, lim, val, limv) => rows.push({ group, name, unit, lim, val, limv: limv || [-Infinity, Infinity] });
     const all = br.map(() => true), emb = br.map(b => !b);
     // with rail expansion joints: temperature as total stress (no limit),
