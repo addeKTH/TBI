@@ -363,8 +363,11 @@ function model(out, W, H, fsz) {
 
 // ---------------------------------------------------------------- DIAGRAMS (PlotResults.m)
 // titles; with SW/0 the middle diagram has dash-dot lines
-const dtitle = (out, i) => (i === 1 && out.inp.Load.SW
-    ? 'LM71 (dashed), SW/0 (dash-dot), braking/traction (solid), envelope' : DTITLE[i]);
+// with rail expansion joints (Track.rej): total stress for temperature, variable
+// loads at neutral temperature for the combination
+const dtitle = (out, i) => (i === 1 && out.inp.Load.SW ? 'LM71 (dashed), SW/0 (dash-dot), braking/traction (solid), envelope'
+    : i === 0 && out.Track.rej ? 'Temperature, total rail stress (dotted: fully restrained rail)'
+    : i === 2 && out.Track.rej ? 'Governing load combination without temperature' : DTITLE[i]);
 const DTITLE = ['Temperature', 'Vertical traffic (dashed), braking/traction (solid), envelope',
                 'Governing load combination (solid), temperature step (dashed)'];
 
@@ -379,6 +382,7 @@ function diagram(out, k, W, H, fsz, title) {
     const T = out.Track, M = out.Model, Lim = out.inp.Limits, Ld = out.inp.Load;
     const x = T.x, xl = [-60 - (M.x0 || 0), M.Lb + 60 - (M.x0 || 0)], col = ['#ff0000', '#0000ff'];   // x from support 1
     const lim = [Lim.sig_emb[0], Lim.sig_emb[1]];
+    const limT = T.rej ? T.sig_emb : lim;                         // REJ: fully restrained rail
     const svg = new Svg(W, H);
     const fs = fsz, cid = 'clip' + (++clipId);
     const top = title ? 1.9 * fs * PT : 0.6 * fs * PT;
@@ -391,7 +395,7 @@ function diagram(out, k, W, H, fsz, title) {
             for (let s = 0; s < 2; s++) {
                 ax.line(x, T.temp.min[s], { color: col[s], lw: 1, clip: cid });
                 if (T.temp.max[s].some((v, i) => v !== T.temp.min[s][i])) ax.line(x, T.temp.max[s], { color: col[s], lw: 1, clip: cid });
-                ax.line(xl, [lim[s], lim[s]], { color: col[s], dash: ':' });
+                ax.line(xl, [limT[s], limT[s]], { color: col[s], dash: ':' });
             }
         };
     } else if (k === 1) {
@@ -458,14 +462,19 @@ const BQ = { SF: ['M', 'V', 'N'], disp: ['u', 'w', 'th'] };
 const BY = { SF: ['<i>M</i> (MNm)', '<i>V</i> (MN)', '<i>N</i> (MN)'], disp: ['<i>u</i> (mm)', '<i>w</i> (mm)', '<i>θ</i> (mrad)'] };
 const BT = { SF: ['Bending moment (sagging positive)', 'Shear force', 'Axial force (tension positive)'],
              disp: ['Longitudinal displacement (track slip centre)', 'Vertical displacement (up positive)', 'Rotation (anticlockwise positive)'] };
-const LCN = ['Temperature', 'Vertical traffic, braking/traction (envelopes)', 'Governing load combination'];
+// load cases of the bridge diagrams with their line styles (lc 1...3)
+const LCN = ['Temperature, envelope', 'Vertical traffic (dashed), braking/traction (solid), envelopes',
+             'Governing load combination (solid), temperature step (dashed)'];
+const lcname = (out, lc) => (lc === 2 && out && out.inp.Load.SW
+    ? 'LM71 (dashed), SW/0 (dash-dot), braking/traction (solid), envelopes' : LCN[lc - 1]);
 
 function bridge(out, lc, iq, kind, W, H, fsz, title) {
     const Bk = out.Bridge, M = out.Model, Ld = out.inp.Load, q = BQ[kind][iq];
     const F = kind === 'disp' ? Bk.D : Bk.F, x = Bk.xF || Bk.x;
     const x0 = M.x0 || 0, xl = [-x0 - 0.03 * M.Lb, M.Lb - x0 + 0.03 * M.Lb], col = ['#ff0000', '#0000ff'];
     const svg = new Svg(W, H), fs = fsz, cid = 'clip' + (++clipId);
-    const top = title ? 1.9 * fs * PT : 0.6 * fs * PT;
+    const nl = Array.isArray(title) ? title.length : 1;           // title lines
+    const top = title ? (1.9 + 1.15 * (nl - 1)) * fs * PT : 0.6 * fs * PT;
     const left = 4.2 * fs * PT, right = 0.6 * fs * PT, bottom = 3.0 * fs * PT;
     const pos = [left / W, bottom / H, (W - left - right) / W, (H - top - bottom) / H];
     const L = [];                                                  // [{y, dash, lw, s}]
@@ -576,5 +585,5 @@ function niceStep(range, n) {
 }
 const fmtTick = v => (Math.abs(v) < 1e-9 ? '0' : (v < 0 ? '−' : '') + String(+Math.abs(v).toFixed(6)));
 
-root.TBIPlot = { model, diagram, bridge, loadModel, BT, LCN, DTITLE, dtitle, textSvg, markup };
+root.TBIPlot = { model, diagram, bridge, loadModel, BT, LCN, lcname, DTITLE, dtitle, textSvg, markup };
 })(typeof window !== 'undefined' ? window : globalThis);
