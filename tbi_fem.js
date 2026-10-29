@@ -20,7 +20,10 @@
      TBI.defaults(inp)                  -> {inp, Model}   input completed with defaults
      await TBI.analysis(inp, opt)       -> out            all load cases
      TBI.solve(Track, Bridge, Load, opt)-> one load case (low level)
-   opt.progress = function(fraction 0..1), called after every analysis.
+   opt.progress = function(fraction 0..1), called about every 0.2 s.
+   opt.workers = 0 runs on the main thread; otherwise the load cases are
+   solved in parallel in Web Workers when the browser allows it.
+   opt.solver.state1 (TBI.solve) restarts step 2 from a saved step 1 (R.state1).
 
    INPUT (SI units, default values as TBI_fem.m):
      inp.Bridge: L (array, m), E (Pa), A (m2), I (m4), e_b, h (m) required;
@@ -606,6 +609,14 @@ TBI.solve = function (Track, Bridge, Load, Opt0) {
     const dref = new Float64Array(ns), FA = new Float64Array(ns);
     const Ust = [], Fsp = [];
     const Info = { inc: [0, 0], it: [0, 0], nsp: ns, ndof, band: bw };
+    // step 1 does not depend on the traffic loads or on the loaded springs
+    // (set 2): its state can be saved and reused by load cases with the same
+    // model and temperature (Opt.state1, returned as R.state1)
+    const b1 = [];
+    for (let i = 0; i < ns; i++) if (sp[i].birth === 1) b1.push(i);
+    const S1 = Opt.state1;
+    const reuse1 = S1 && S1.ndof === ndof && S1.n1 === b1.length;    // a rail break acts only in step 2
+    let state1 = null;
     for (let st = 1; st <= 2; st++) {
         const on = sp.map(s => s.birth <= st);
         if (st > 1) {
@@ -625,8 +636,15 @@ TBI.solve = function (Track, Bridge, Load, Opt0) {
             }
         }
         const nInc = Opt.nInc[Math.min(st, Opt.nInc.length) - 1];
-        const r = solveStep(U, dp, al, st, on, nInc, dref, FA);
+        let r;
+        if (st === 1 && reuse1) {
+            r = { U: Float64Array.from(S1.U), dp: new Float64Array(ns), al: new Float64Array(ns), it: S1.it, ninc: S1.ninc };
+            b1.forEach((i, j) => { r.dp[i] = S1.dp[j]; r.al[i] = S1.al[j]; });
+        } else r = solveStep(U, dp, al, st, on, nInc, dref, FA);
         U = r.U; dp = r.dp; al = r.al;
+        if (st === 1)
+            state1 = { ndof, n1: b1.length, U: Float64Array.from(U), dp: Float64Array.from(b1, i => dp[i]),
+                       al: Float64Array.from(b1, i => al[i]), it: r.it, ninc: r.ninc };
         relF = 1;
         Ust.push(U);
         Fsp.push(springs(U, dp, al, on, dref, FA).f);
@@ -666,7 +684,7 @@ TBI.solve = function (Track, Bridge, Load, Opt0) {
         Rh: Fsp.map(f => sp.map((s, i) => (s.kind === 4 ? -f[i] : null)).filter(v => v !== null)),
         Res: Fsp.map(f => sp.map((s, i) => (s.kind === 5 ? f[i] : null)).filter(v => v !== null))
     };
-    return { ResTr1: ResTr[0], ResTr2: nt === 2 ? ResTr[1] : null, ResBr, Info };
+    return { ResTr1: ResTr[0], ResTr2: nt === 2 ? ResTr[1] : null, ResBr, Info, state1 };
 };
 
 // ------------------------------------------------------------ COMPLETE ANALYSIS
@@ -691,6 +709,94 @@ function clipseg(rows, Lb, q, lmin) {
 
 const tick = () => new Promise(r => setTimeout(r, 0));
 
+// ------------------------------------------------------------ PARALLEL RUNS
+// The load cases are solved in Web Workers (one per core, kept between runs).
+// Without workers (no Worker support, page opened as a file, opt.workers = 0)
+// they run on the main thread, which yields to the browser only when the
+// progress bar is updated (about every 0.2 s).
+const SRC = (typeof document !== 'undefined' && document.currentScript) ? document.currentScript.src : null;
+const DT_PROG = 200;                                              // ms between progress updates
+let pool = null;                                                  // Promise -> [Worker] or null
+let runId = 0;
+
+function makePool(n) {
+    if (!SRC || typeof Worker === 'undefined' || typeof Blob === 'undefined' || /^file:/i.test(SRC))
+        return Promise.resolve(null);
+    const code = 'importScripts(' + JSON.stringify(SRC) + ');\n' +
+        'postMessage({ ready: true });\n' +
+        'onmessage = function (e) {\n' +
+        '    var m = e.data;\n' +
+        '    try { postMessage({ rid: m.rid, id: m.id, R: TBI.solve(m.Tr, m.Br, m.Lk, m.Os) }); }\n' +
+        '    catch (err) { postMessage({ rid: m.rid, id: m.id, error: String((err && err.message) || err) }); }\n' +
+        '};\n';
+    let url;
+    try { url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' })); }
+    catch (e) { return Promise.resolve(null); }
+    const start = () => new Promise(res => {
+        let w;
+        try { w = new Worker(url); } catch (e) { res(null); return; }
+        const to = setTimeout(() => { w.terminate(); res(null); }, 5000);
+        w.onmessage = e => { if (e.data && e.data.ready) { clearTimeout(to); res(w); } };
+        w.onerror = ev => { if (ev && ev.preventDefault) ev.preventDefault(); clearTimeout(to); w.terminate(); res(null); };
+    });
+    return Promise.all(Array.from({ length: n }, start)).then(ws => {
+        ws = ws.filter(Boolean);
+        return ws.length ? ws : null;
+    });
+}
+
+function getWorkers(opt) {
+    if (opt.workers === 0 || opt.workers === false) return Promise.resolve(null);
+    if (!pool) {
+        const nc = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+        pool = makePool(Math.max(1, Math.min(16, nc - 1)));
+    }
+    return pool;
+}
+
+// jobs: [{Tr, Br, Lk, Os}] -> results in the same order; done() after every job
+async function runJobs(jobs, workers, done) {
+    const res = new Array(jobs.length);
+    const solveHere = async idx => {
+        for (const i of idx) {
+            const j = jobs[i];
+            res[i] = TBI.solve(j.Tr, j.Br, j.Lk, j.Os);
+            await done();
+        }
+    };
+    if (!workers || !jobs.length) { await solveHere(jobs.map((_, i) => i)); return res; }
+    const rid = ++runId;
+    const lost = await new Promise((resolve, reject) => {
+        let next = 0, left = jobs.length, stop = false;
+        const send = w => {
+            if (stop || next >= jobs.length) return;
+            const i = next++, j = jobs[i];
+            w.postMessage({ rid, id: i, Tr: j.Tr, Br: j.Br, Lk: j.Lk, Os: j.Os });
+        };
+        for (const w of workers) {
+            w.onmessage = e => {
+                const m = e.data;
+                if (stop || !m || m.rid !== rid) return;
+                if (m.error) { stop = true; reject(new Error(m.error)); return; }
+                res[m.id] = m.R; left--;
+                done();
+                if (!left) resolve(null); else send(w);
+            };
+            w.onerror = ev => {                                   // worker lost: finish on the main thread
+                if (ev && ev.preventDefault) ev.preventDefault();
+                if (stop) return;
+                stop = true;
+                workers.forEach(x => x.terminate());
+                pool = Promise.resolve(null);
+                resolve(res.map((r, i) => (r ? -1 : i)).filter(i => i >= 0));
+            };
+        }
+        workers.forEach(send);
+    });
+    if (lost) await solveHere(lost);
+    return res;
+}
+
 TBI.analysis = async function (inp0, opt) {
     opt = opt || {};
     const t0 = performance.now();
@@ -700,6 +806,7 @@ TBI.analysis = async function (inp0, opt) {
     const sig_emb = T.dT.map(d => -T.E * T.alfa * d / 1e6);
     const TrS = [0, 1].map(k => lowlevel(inp, k));
     const Os = Object.assign({}, opt.solver || {});
+    const workers = await getWorkers(opt);
     let nRun = 0;
 
     // load arrangements
@@ -735,24 +842,29 @@ TBI.analysis = async function (inp0, opt) {
     const place = (sd, Lh, env) => (sd === 'v' ? [env[0], Math.min(env[1], env[0] + Lh)] : [Math.max(env[0], env[1] - Lh), env[1]]);
     const hpos = (hh, env) => [hh.fb !== 0 ? [place(hh.sb, Lbrk, env)] : [], hh.fa !== 0 ? [place(hh.sa, Lacc, env)] : []];
 
+    // progress, at most every DT_PROG ms (also the yield of the main thread)
     const nV = 2 * ((Ld.LM71 ? xl.length : 0) + (Ld.SW ? x0.length : 0));
-    let nCand = 3, ncv = 5, pdone = 0;
-    async function progress() {
+    let nTot = 3 + 3 + nV + 2 * H.length + 2 * 5 * H.length, pdone = 0, tProg = performance.now();
+    async function done() {
         nRun++;
+        if (performance.now() - tProg < DT_PROG) return;
         if (opt.progress) {
-            const nEst = 3 + nCand + nV + 2 * H.length + 2 * Math.max(1, ncv) * H.length;
-            pdone = Math.max(pdone, Math.min(nRun / nEst, 0.99));
+            pdone = Math.max(pdone, Math.min(nRun / nTot, 0.99));
             opt.progress(pdone);
         }
-        await tick();
+        if (!workers) await tick();
+        tProg = performance.now();
     }
 
-    async function runCase(k, temp, Seg, Lpos, bp, ap, fb, fa) {
-        const Lk = { TD: temp * B.dT[k], TR: temp * T.dT[k], Seg, LoadedPos: Lpos,
-                     qlbk: alfa * Ld.qlbk * fb, BrkPos: bp, qlak: alfa * Ld.qlak * fa, AccPos: ap };
-        const R = TBI.solve(TrS[k].Tr, TrS[k].Br, Lk, Os);
-        await progress();
-        const r = { x: [] };
+    // one load case: job for TBI.solve and the processing of its result
+    const job = (k, temp, Seg, Lpos, bp, ap, fb, fa, S1) => ({
+        k, temp, Tr: TrS[k].Tr, Br: TrS[k].Br,
+        Lk: { TD: temp * B.dT[k], TR: temp * T.dT[k], Seg, LoadedPos: Lpos,
+              qlbk: alfa * Ld.qlbk * fb, BrkPos: bp, qlak: alfa * Ld.qlak * fa, AccPos: ap },
+        Os: S1 ? Object.assign({}, Os, { state1: S1 }) : Os });
+    function post(R, jb) {
+        const k = jb.k, temp = jb.temp;
+        const r = { x: [], state1: R.state1 };
         for (let i = 0; i < R.ResTr1.x.length; i += 2) r.x.push(R.ResTr1.x[i] - M.Le);
         r.S = [R.ResTr1.Sr.map(s => atSeats(s).map(v => v / 1e6 - temp * sig_emb[k]))];   // [track][step][seat]
         if (nt === 2) r.S.push(R.ResTr2.Sr.map(s => atSeats(s).map(v => v / 1e6 - temp * sig_emb[k])));
@@ -764,8 +876,28 @@ TBI.analysis = async function (inp0, opt) {
         return r;
     }
 
+    // ---- round 1: temperature, rail break (intact rail), vertical traffic
+    // sweeps, braking/acceleration; all independent
+    const Lw = { TD: B.dT[1], TR: T.dT_brk, Seg: [], LoadedPos: [], qlbk: 0, BrkPos: [], qlak: 0, AccPos: [] };
+    const sweeps = [];
+    if (Ld.LM71) sweeps.push({ typ: 'LM71', xp: xl, segf: segLM, envf: () => [[0, Lb]], g: 'LM71' });
+    if (Ld.SW) sweeps.push({ typ: 'SW/0', xp: x0, segf: segSW, envf: segSW, g: 'SW' });
+    const J1 = [job(0, 1, [], [], [], [], 0, 0), job(1, 1, [], [], [], [], 0, 0),
+                { Tr: TrS[1].Tr, Br: TrS[1].Br, Lk: Lw, Os }];
+    for (const sw of sweeps) for (let kv = 0; kv < 2; kv++) for (const xx of sw.xp) {
+        const sg = sw.segf(xx);
+        J1.push(job(kv, 0, sg, sg.map(s => [s[0], s[1]]), [], [], 0, 0));
+    }
+    const iH = J1.length;
+    for (let k = 0; k < 2; k++) for (const hh of H) {
+        const [bp, ap] = hpos(hh, [0, Lb]);
+        J1.push(job(k, 0, [], [[0, Lb]], bp, ap, hh.fb, hh.fa));
+    }
+    const R1all = await runJobs(J1, workers, done);
+
     // temperature
-    let r = await runCase(0, 1, [], [], [], [], 0, 0);
+    const tempR = [post(R1all[0], J1[0]), post(R1all[1], J1[1])];
+    let r = tempR[0];
     const x = r.x, nr = x.length;
     const onBr = x.map(v => v > -1e-9 && v < Lb + 1e-9);
     const groups = ['temp', 'LM71', 'SW', 'brk', 'acc', 'comb'];
@@ -792,17 +924,15 @@ TBI.analysis = async function (inp0, opt) {
     };
     const ends = a => [a[0], a[a.length - 1]];
     for (let k = 0; k < 2; k++) {
-        if (k === 1) r = await runCase(1, 1, [], [], [], [], 0, 0);
+        r = tempR[k];
         addEnv(G.temp, r.S, k);
         Rh.temp[k] = r.Rh[1].slice();
         dTemp[k] = ends(r.dx[1]).map(v => 1e3 * v);
         gapOpen.temp[k] = r.gap.slice();
     }
 
-    // rail break, CEN/TR 17231 A.2
-    const Lw = { TD: B.dT[1], TR: T.dT_brk, Seg: [], LoadedPos: [], qlbk: 0, BrkPos: [], qlak: 0, AccPos: [] };
-    const R1 = TBI.solve(TrS[1].Tr, TrS[1].Br, Lw, Os);
-    await progress();
+    // rail break, CEN/TR 17231 A.2: candidate positions from the intact rail
+    const R1 = R1all[2];
     const xr1 = R1.ResTr1.x.map(v => v - M.Le), s1 = R1.ResTr1.Sr[0].slice();
     s1[s1.length - 1] = NaN;
     let im = -1, best = -Infinity;
@@ -815,26 +945,18 @@ TBI.analysis = async function (inp0, opt) {
     if (T.gap.length) xc = xc.filter(v => T.gap.every(g => Math.abs(v - g) > 2 * T.s_r));
     const Brk = { x: xc, w: [], S0: atSeats(R1.ResTr1.Sr[0]).map(v => v / 1e6), S: [], dT_R: T.dT_brk, dT_B: B.dT[1],
                   wCWR: 1e3 * Math.pow(T.alfa * T.dT_brk, 2) * T.A * T.E / T.Fu[1] };
-    for (let j = 0; j < xc.length; j++) {
-        const Tb = Object.assign({}, TrS[1].Tr, { brk: xc[j] });
-        const Rb = TBI.solve(Tb, TrS[1].Br, Lw, Os);
-        await progress();
-        Brk.w.push(1e3 * Rb.ResTr1.wbrk);
-        if (Brk.w[j] >= Math.max(...Brk.w)) { Brk.S = atSeats(Rb.ResTr1.Sr[1]).map(v => v / 1e6); Brk.xmax = xc[j]; }
-    }
-    Brk.wmax = Brk.w.length ? Math.max(...Brk.w) : NaN;
-    nCand = xc.length;
 
-    // vertical traffic: LM71 and SW/0
+    // vertical traffic: LM71 and SW/0, envelopes and critical positions
     const crit = [];
     const kname = ['largest compression', 'largest tension', 'δH left end', 'δH right end', 'bearing force support ' + B.FL];
     const season = ['summer', 'winter'];
-    async function vertSweep(typ, xp, segf, envf, g) {
+    let ij = 3;
+    for (const sw of sweeps) {
+        const { typ, xp, segf, envf, g } = sw;
         const qv = [[], []];
         for (let kv = 0; kv < 2; kv++) {
-            for (let iv = 0; iv < xp.length; iv++) {
-                const sg = segf(xp[iv]);
-                const rv = await runCase(kv, 0, sg, sg.map(s => [s[0], s[1]]), [], [], 0, 0);
+            for (let iv = 0; iv < xp.length; iv++, ij++) {
+                const rv = post(R1all[ij], J1[ij]);
                 addEnv(G[g], rv.S, kv);
                 Rh[g][kv] = smax(Rh[g][kv], rv.Rh[1]);
                 const dhv = ends(rv.dx[1]).map(v => 1e3 * v);
@@ -856,53 +978,69 @@ TBI.analysis = async function (inp0, opt) {
             }
         }
     }
-    if (Ld.LM71) await vertSweep('LM71', xl, segLM, () => [[0, Lb]], 'LM71');
-    if (Ld.SW) await vertSweep('SW/0', x0, segSW, segSW, 'SW');
     const seen = new Set();
     let cv = crit.filter(c => { const key = c.typ + '_' + c.x.toFixed(4); if (seen.has(key)) return false; seen.add(key); return true; });
-    ncv = cv.length;
     if (!cv.length) cv = [{ typ: 'no vertical load', x: 0, krit: '', season: '', seg: [], Lpos: [[0, Lb]], env: [0, Lb] }];
 
     // braking and acceleration on loaded track, no vertical load
+    ij = iH;
     for (let k = 0; k < 2; k++) for (const hh of H) {
-        const [bp, ap] = hpos(hh, [0, Lb]);
-        const rr = await runCase(k, 0, [], [[0, Lb]], bp, ap, hh.fb, hh.fa);
+        const rr = post(R1all[ij], J1[ij]); ij++;
         const d = ends(rr.dx[1]).map(v => 1e3 * Math.abs(v));
         if (hh.fb !== 0) { addEnv(G.brk, rr.S, k); dB[k] = dB[k].map((v, i) => Math.max(v, d[i])); Rh.brk[k] = smax(Rh.brk[k], rr.Rh[1]); }
         else             { addEnv(G.acc, rr.S, k); dA[k] = dA[k].map((v, i) => Math.max(v, d[i])); Rh.acc[k] = smax(Rh.acc[k], rr.Rh[1]); }
         r = rr;
     }
 
+    // ---- round 2: broken rail and load combinations, temperature step
+    // taken from round 1 (identical step 1)
+    const J2 = [];
+    for (const xb of xc)
+        J2.push({ Tr: Object.assign({}, TrS[1].Tr, { brk: xb }), Br: TrS[1].Br, Lk: Lw,
+                  Os: Object.assign({}, Os, { state1: R1.state1 }) });
+    const iC = J2.length, CH = [];
+    for (let k = 0; k < 2; k++) for (const c of cv) for (const hh of H) {
+        const [bp, ap] = hpos(hh, c.env);
+        J2.push(job(k, 1, c.seg, c.Lpos, bp, ap, hh.fb, hh.fa, tempR[k].state1));
+        CH.push({ k, c, hh });
+    }
+    nTot = nRun + J2.length;
+    const R2all = await runJobs(J2, workers, done);
+
+    for (let j = 0; j < xc.length; j++) {
+        const Rb = R2all[j];
+        Brk.w.push(1e3 * Rb.ResTr1.wbrk);
+        if (Brk.w[j] >= Math.max(...Brk.w)) { Brk.S = atSeats(Rb.ResTr1.Sr[1]).map(v => v / 1e6); Brk.xmax = xc[j]; }
+    }
+    Brk.wmax = Brk.w.length ? Math.max(...Brk.w) : NaN;
+
     // combination: temperature (step 1) + vertical traffic in the critical
     // positions + braking/acceleration (step 2)
     const gov = [new Array(nr).fill(NaN), new Array(nr).fill(NaN)], govT = [new Array(nr).fill(NaN), new Array(nr).fill(NaN)];
     const komb = [{ vert: '', H: '', u: 0 }, { vert: '', H: '', u: 0 }];
-    for (let k = 0; k < 2; k++) {
-        let ub = -Infinity;
-        for (const c of cv) for (const hh of H) {
-            const [bp, ap] = hpos(hh, c.env);
-            const rr = await runCase(k, 1, c.seg, c.Lpos, bp, ap, hh.fb, hh.fa);
-            addEnv(G.comb, rr.S, k);
-            Rh.comb[k] = smax(Rh.comb[k], rr.Rh[1]);
-            gapOpen.combMin[k] = gapOpen.combMin[k].map((v, i) => Math.min(v, rr.gap[i]));
-            gapOpen.combMax[k] = gapOpen.combMax[k].map((v, i) => Math.max(v, rr.gap[i]));
-            for (const St of rr.S) {
-                const s = St[1];
-                let mnB = Infinity, mxB = -Infinity, mnE = Infinity, mxE = -Infinity;
-                for (let i = 0; i < s.length; i++) {
-                    if (isNaN(s[i])) continue;
-                    if (onBr[i]) { mnB = Math.min(mnB, s[i]); mxB = Math.max(mxB, s[i]); }
-                    else         { mnE = Math.min(mnE, s[i]); mxE = Math.max(mxE, s[i]); }
-                }
-                const u = Math.max(mnB / Lim.sig_br[0], mxB / Lim.sig_br[1], mnE / Lim.sig_emb[0], mxE / Lim.sig_emb[1]);
-                if (u > ub) {
-                    ub = u; gov[k] = s.slice(); govT[k] = St[0].slice();
-                    komb[k] = { vert: c.typ + ', x = ' + c.x.toFixed(2) + ' m (' + c.krit + ')', H: hh.name, u };
-                }
+    const ub = [-Infinity, -Infinity];
+    CH.forEach(({ k, c, hh }, j) => {
+        const rr = post(R2all[iC + j], J2[iC + j]);
+        addEnv(G.comb, rr.S, k);
+        Rh.comb[k] = smax(Rh.comb[k], rr.Rh[1]);
+        gapOpen.combMin[k] = gapOpen.combMin[k].map((v, i) => Math.min(v, rr.gap[i]));
+        gapOpen.combMax[k] = gapOpen.combMax[k].map((v, i) => Math.max(v, rr.gap[i]));
+        for (const St of rr.S) {
+            const s = St[1];
+            let mnB = Infinity, mxB = -Infinity, mnE = Infinity, mxE = -Infinity;
+            for (let i = 0; i < s.length; i++) {
+                if (isNaN(s[i])) continue;
+                if (onBr[i]) { mnB = Math.min(mnB, s[i]); mxB = Math.max(mxB, s[i]); }
+                else         { mnE = Math.min(mnE, s[i]); mxE = Math.max(mxE, s[i]); }
             }
-            r = rr;
+            const u = Math.max(mnB / Lim.sig_br[0], mxB / Lim.sig_br[1], mnE / Lim.sig_emb[0], mxE / Lim.sig_emb[1]);
+            if (u > ub[k]) {
+                ub[k] = u; gov[k] = s.slice(); govT[k] = St[0].slice();
+                komb[k] = { vert: c.typ + ', x = ' + c.x.toFixed(2) + ' m (' + c.krit + ')', H: hh.name, u };
+            }
         }
-    }
+        r = rr;
+    });
 
     const out = { inp, Model: M };
     out.Track = { x, onBr, sig_emb };
@@ -913,7 +1051,7 @@ TBI.analysis = async function (inp0, opt) {
     out.Bridge = { x: r.xb, xsup: M.xsup, dTemp, dB, dA, dH, dV, Rh };
     out.LoadPos = { vert: crit, H, komb, Lbrk, Lacc, xloco: xl, xSW: x0 };
     out.Table = table(out);
-    out.Info = { nRun, time: (performance.now() - t0) / 1e3 };
+    out.Info = { nRun, time: (performance.now() - t0) / 1e3, workers: workers ? workers.length : 0 };
     if (opt.progress) opt.progress(1);
     return out;
 };
