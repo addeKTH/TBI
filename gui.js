@@ -1,9 +1,10 @@
 /* gui.js ---------------------------------------------------------------------
-   User interface of the TBI web app (port of TBI_GUI.m): input tabs, model,
-   Run with progress bar, result tables and diagrams, Save/Open of the input
-   (JSON, same format as TBI_GUI.m), Excel export and printing (report and
-   diagrams, A4, "Save as PDF" in the print dialog).
-   Andreas Andersson, 2026-10-28 (assisted by Claude)
+   User interface of the TBI web app (port of TBI_GUI.m): input tabs (with the
+   load models in the Load tab), model, Run with progress bar, result tabs
+   Tables, Rail stress, Bridge SF and Bridge disp, Save/Open of the input
+   (JSON, same format as TBI_GUI.m), Excel export and printing (report, rail
+   stress, bridge SF and disp, A4, "Save as PDF" in the print dialog).
+   Andreas Andersson, 2026-10-28, updated 2026-10-29 (assisted by Claude)
 ---------------------------------------------------------------------------*/
 (function () {
 'use strict';
@@ -14,7 +15,7 @@ const S = (v, s) => `<i>${v}</i><sub>${s}</sub>`;
 // ---------------------------------------------------------------- input fields
 // tab, key, label (HTML), kind (edit, drop, check, out, blank), default value (Bryngeån), tooltip, items
 const FIELDS = [
- ['Bridge','L',     'Spans <i>L</i> (m)',          'edit','48.1',      'span lengths, one per span, continuous deck'],
+ ['Bridge','L',     'Spans <i>L</i> (m)',          'edit','48',        'span lengths, one per span, continuous deck'],
  ['Bridge','E',     '<i>E</i> (GPa)',              'edit','210',       "Young's modulus of the deck; within 15 % of 210 GPa = steel"],
  ['Bridge','A',     '<i>A</i> (m²)',               'edit','0.8',       'cross-section area (equivalent steel section for composite decks)'],
  ['Bridge','I',     '<i>I</i> (m⁴)',               'edit','1.0',       'second moment of area'],
@@ -23,7 +24,7 @@ const FIELDS = [
  ['Bridge','blank1','',                            'blank','',         ''],
  ['Bridge','dtype', 'Deck type',                   'drop','2 composite','EN 1991-1-5 6.1.1, Figure 6.1 (AC:2009)', ['1 steel','2 composite','3 concrete']],
  ['Bridge','alfab', S('α','b') + ' (1/K)',          'out', '',          'thermal expansion of the deck (from E)'],
- ['Bridge','Lend',  S('L','end') + ' (m)',          'edit','0.325',     'deck end beyond the end bearings, both ends; rounded to a multiple of s_r/2 (as in the model), first rail seat at the deck end'],
+ ['Bridge','Lend',  S('L','end') + ' (m)',          'edit','0.45',      'deck end beyond the end bearings, both ends; the model rounds it to s_r/6 and the bridge length to whole s_r (spans scaled), a rail seat at each deck end'],
  ['Bridge','Kh',    S('K','h') + ' (GN/m)',         'edit','0 1e4',     'longitudinal stiffness per support, 0 = movable bearing; filled in (fixed at the right end) when the number of spans changes'],
  ['Bridge','ntrack','Tracks',                      'drop','1',         'number of tracks', ['1','2']],
  ['Bridge','blank2','',                            'blank','',         ''],
@@ -46,7 +47,7 @@ const FIELDS = [
  ['Track','Fu',     S('F','u') + ' s / w (kN/m)',   'edit','20 30',     'resistance of unloaded track, summer / winter'],
  ['Track','Fl',     S('F','l') + ' (kN/m)',         'edit','60',        'resistance of loaded track'],
  ['Track','Kv',     S('k','v') + ' c / u (MN/m)',   'edit','80 4',      'vertical stiffness per sleeper, 2 rails, compression / uplift'],
- ['Track','gap',    'REJ at <i>x</i> (m)',         'edit','',          'rail expansion joints, x from the left bridge end; empty = CWR'],
+ ['Track','gap',    'REJ at <i>x</i> (m)',         'edit','',          'rail expansion joints, x from support 1; empty = CWR'],
  ['Track','dTR',    'Δ' + S('T','R') + ' s / w (K)','edit','0 0',       'rail temperature change, summer / winter (0 0 for CWR)'],
  ['Load','alfa',    '<i>α</i>',                    'edit','1.33',      'load classification factor'],
  ['Load','LM71',    'LM71',                        'check',true,       'LM71 on the whole bridge, locomotive from the movable bearing'],
@@ -61,6 +62,7 @@ const FIELDS = [
  ['Limits','dB',    S('δ','B') + ' (mm)',           'edit','5',         'deck end displacement, braking/traction, 8.5.4.5.2'],
  ['Limits','dH',    S('δ','H') + ' (mm)',           'edit','8',         'deck end displacement, vertical traffic'],
  ['Limits','dV',    S('δ','V') + ' (mm)',           'edit','2',         'vertical deck end displacement (line speed > 160 km/h)'],
+ ['Limits','wL',    '<i>L</i>/' + S('δ','max'),      'edit','600',       'largest deflection of a span from vertical traffic: delta <= L/600 (LM71, SW/0 x alpha, no dynamic factor)'],
  ['Limits','wgap',  S('w','gap') + ' (mm)',         'edit','50',        'TRVINFRA-00012 K35714']
 ].map(d => ({ tab: d[0], key: d[1], label: d[2], kind: d[3], val: d[4], tip: d[5], items: d[6] }));
 const TABS = ['Bridge', 'Track', 'Load', 'Limits'];
@@ -124,6 +126,12 @@ function buildInputs() {
             P[d.key] = el;
         });
         pg.appendChild(gr);
+        if (t === 'Load') {                                      // LM71 and SW/0 with dimensions (drawLoads)
+            const lg = document.createElement('div'); lg.className = 'loads';
+            lg.style.height = (nrm * 25 + 4 - nr * 25 - 8) + 'px';
+            lg.innerHTML = '<div id="ldLM71"></div><div id="ldSW"></div>';
+            pg.appendChild(lg);
+        }
         $('ipages').appendChild(pg);
     });
     tabsSwitch('itabs');
@@ -136,6 +144,9 @@ function tabsSwitch(id) {
         for (const x of bar.children) x.classList.toggle('on', x === t);
         for (const x of bar.children) $(x.dataset.p).classList.toggle('on', x === t);
         if (t.dataset.p === 'pDiag' && out) drawDiagrams();
+        if (t.dataset.p === 'pBSF' && out) drawBridge(0);
+        if (t.dataset.p === 'pBD' && out) drawBridge(1);
+        if (t.dataset.p === 'inLoad') drawLoads();
     });
 }
 const getv = k => (P[k].type === 'checkbox' ? P[k].checked : P[k].value);
@@ -164,11 +175,6 @@ function onChange(key) {
         }
         break;
     }
-    case 'Lend': case 'sr': {                                      // L_end to a multiple of s_r/2, as in the model
-        const hs = num('sr') / 2;
-        if (isFinite(hs) && hs > 0) P.Lend.value = String(+(hs * Math.round(num('Lend') / hs)).toPrecision(4));
-        break;
-    }
     case 'dtype': P.E.value = P.dtype.value.startsWith('3') ? '35' : '210'; break;
     case 'profile': {
         const pr = { '60E1': [76.70, 3038.3], '50E3': [63.71, 2057.8] }[P.profile.value];
@@ -194,6 +200,7 @@ function onChange(key) {
     P.dTbrk.value = sgn(num('TRmin') - T0);
     P.alfab.value = Math.abs(num('E') / 210 - 1) < 0.15 ? '12e-6' : '10e-6';
     drawModel();
+    drawLoads();
     if (key && out) {                                              // results no longer match the input
         enable(false);
         if (!$('status').textContent) status('Input changed: results not up to date, press Run');
@@ -207,7 +214,7 @@ function buildInp() {
     const inp = {};
     inp.Bridge = { L: vec('L'), E: num('E') * 1e9, A: num('A'), I: num('I'), e_b: num('eb'), h: num('h'),
                    alfa: num('alfab'), L_end: num('Lend'), n_track: num('ntrack'), FL: nsup,
-                   Kh: Kh.map(k => k * 1e9), dT: vec('dTN') };
+                   Kh: Kh.map(k => k * 1e9), dT: vec('dTN'), T0: num('T0'), type: P.dtype.value.replace(/^\d\s+/, '') };
     if (Kh.some(k => k > 0)) inp.Bridge.FL = Kh.length - Kh.slice().reverse().findIndex(k => k > 0);
     const kv = vec('Kv');
     inp.Track = { type: P.ttype.value, A: 2 * num('Ar') * 1e-4, I: 2 * num('Ir') * 1e-8, E: 210e9, alfa: 12e-6,
@@ -216,7 +223,8 @@ function buildInp() {
                   dT: vec('dTR'), dT_brk: num('dTbrk'), gap: vec('gap') };
     inp.Load = { alfa: num('alfa'), LM71: P.LM71.checked, SW: P.SW.checked, dxPos: num('dxPos'),
                  qlbk: num('qlbk') * 1e3, Qlbk_max: num('Qlbk') * 1e3, qlak: num('qlak') * 1e3, Qlak_max: num('Qlak') * 1e3 };
-    inp.Limits = { sig_br: vec('sigbr'), sig_emb: vec('sigemb'), dB: num('dB'), dH: num('dH'), dV: num('dV'), wgap: num('wgap') };
+    inp.Limits = { sig_br: vec('sigbr'), sig_emb: vec('sigemb'), dB: num('dB'), dH: num('dH'), dV: num('dV'),
+                   wL: num('wL'), wgap: num('wgap') };
     for (const [g, o] of Object.entries(inp)) for (const [k, v] of Object.entries(o))
         if ((typeof v === 'number' && isNaN(v)) || (Array.isArray(v) && v.some(isNaN)))
             throw new Error('invalid number in ' + g + '.' + k + '.');
@@ -237,6 +245,16 @@ function drawModel() {
     }
 }
 
+function drawLoads() {
+    // load models LM71 and SW/0 in the Load tab, only when ticked (drawn when the tab is shown)
+    for (const [id, k, which] of [['ldLM71', 'LM71', 'LM71'], ['ldSW', 'SW', 'SW']]) {
+        const box = $(id);
+        if (!box) continue;
+        const W = box.clientWidth, H = box.clientHeight;
+        box.innerHTML = P[k].checked && W > 0 ? TBIPlot.loadModel(which, W, H, 9) : '';
+    }
+}
+
 // ---------------------------------------------------------------- status, progress, symbols
 function status(t, tip) { $('status').textContent = t; $('status').title = tip || t; }
 function setProg(fr) {
@@ -244,7 +262,7 @@ function setProg(fr) {
     $('progFill').style.width = Math.round(fr * 118) + 'px';
     $('progTxt').textContent = Math.round(100 * fr) + ' %';
 }
-function enable(on) { for (const id of ['sReport', 'sExport', 'sPrint']) $(id).classList.toggle('off', !on); }
+function enable(on) { for (const id of ['sReport', 'sExport', 'sPrint', 'sPrintSF', 'sPrintD']) $(id).classList.toggle('off', !on); }
 
 // ---------------------------------------------------------------- run
 async function onRun() {
@@ -268,8 +286,9 @@ async function onRun() {
 // ---------------------------------------------------------------- results
 const GROUPS = [['stress', 'Additional rail stress (MPa)'], ['disp', 'Displacements (mm)'], ['force', 'Longitudinal bearing forces (kN)']];
 function fmtVal(t, k, html) {
-    const f = t.unit === 'kN' ? v => v.toFixed(0) : t.unit === 'MPa' ? v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(1)
-                               : v => (v < 0 ? '−' : '') + Math.abs(v).toFixed(1);
+    const d = t.dec === undefined ? 1 : t.dec;                     // own decimals (e.g. deflection, whole mm)
+    const f = t.unit === 'kN' ? v => v.toFixed(0) : t.unit === 'MPa' ? v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(d)
+                               : v => (v < 0 ? '−' : '') + Math.abs(v).toFixed(d);
     return t.val[k].map((v, i) => {
         const s = isNaN(v) ? '–' : f(v);
         return html && t.exceed[k][i] ? `<span class="ex">${s}</span>` : s;
@@ -290,7 +309,15 @@ function tablesHtml(o, report) {
 }
 function showResults() {
     $('tables').innerHTML = tablesHtml(out, false);
-    drawDiagrams();
+    drawDiagrams(); drawBridge(0); drawBridge(1);
+}
+const BK = ['SF', 'disp'], BPAGE = ['pBSF', 'pBD'], BBOX = ['bsfDiags', 'bdDiags'], BSEL = ['lcSF', 'lcD'];
+function drawBridge(kb) {
+    // deck section forces (kb 0) or displacements (kb 1) of the load case in the dropdown
+    const box = $(BBOX[kb]);
+    if (!out || !$(BPAGE[kb]).classList.contains('on')) { box.innerHTML = ''; return; }   // drawn when shown
+    const lc = Number($(BSEL[kb]).value);
+    box.innerHTML = [0, 1, 2].map(i => `<div class="diag">${TBIPlot.bridge(out, lc, i, BK[kb], 600, 236, 9, TBIPlot.BT[BK[kb]][i])}</div>`).join('');
 }
 function drawDiagrams() {
     const box = $('diags');
@@ -304,7 +331,7 @@ function onReset() {
     for (const d of FIELDS) if (d.kind !== 'out' && d.kind !== 'blank') setv(d.key, d.val);
     out = null; enable(false);
     $('tables').innerHTML = '<p id="hint">Press Run to compute all load cases.</p>';
-    $('diags').innerHTML = '';
+    $('diags').innerHTML = '';  $('bsfDiags').innerHTML = '';  $('bdDiags').innerHTML = '';
     onChange('');
     status('Default input (Bryngeån)'); setProg(null);
 }
@@ -375,10 +402,10 @@ async function onExport() {
     const sheets = [];
     const nm = { stress: 'Rail stress', disp: 'Displacements', force: 'Bearing forces' };
     for (const [g] of GROUPS) {
-        const rows = [[{ v: '', s: 'bold' }, { v: 'Limit', s: 'bold' }, { v: 'Summer, min / left', s: 'bold' }, { v: 'Summer, max / right', s: 'bold' },
-                       { v: 'Winter, min / left', s: 'bold' }, { v: 'Winter, max / right', s: 'bold' }, { v: 'Unit', s: 'bold' }]];
+        const rows = [['', 'Limit', 'min/left,s', 'max/right,s', 'min/left,w', 'max/right,w', 'Unit'].map(v => ({ v, s: 'bold' }))];
         for (const t of out.Table.filter(r => r.group === g)) {
-            const rnd = v => (t.unit === 'kN' ? Math.round(v) : Math.round(v * 10) / 10);
+            const p = Math.pow(10, t.dec !== undefined ? t.dec : t.unit === 'kN' ? 0 : 1);   // kN whole, mm and MPa one decimal
+            const rnd = v => Math.round(v * p) / p;
             const cell = (k, i) => {
                 if (t.val[k].length <= i) return null;
                 const v = rnd(t.val[k][i]);
@@ -386,21 +413,46 @@ async function onExport() {
             };
             rows.push([plain(t.name), t.lim.replace('−', '-').replace('–', '--'), cell(0, 0), cell(0, 1), cell(1, 0), cell(1, 1), t.unit]);
         }
-        sheets.push({ name: nm[g], rows, widths: [48, 12, 18, 18, 18, 18, 8] });
+        sheets.push({ name: nm[g], rows, widths: [44, 10, 11, 12, 11, 12, 6] });
     }
-    const T = out.Track, sw = ['summer', 'winter'];
-    const hd = ['x (m)'], cols = [T.x];
-    const grp = [['temp', 'temperature'], ['LM71', 'LM71'], ['SW', 'SW/0'], ['brk', 'braking'], ['acc', 'traction'], ['comb', 'load combination']];
-    for (const [k, n] of grp) for (let s = 0; s < 2; s++) {
-        hd.push(`${n} min ${sw[s]} (MPa)`, `${n} max ${sw[s]} (MPa)`); cols.push(T[k].min[s], T[k].max[s]);
+    // diagram data: short headers (row 1) and units (row 2): group (temp,
+    // LM71, SW, brk, tra, comb), min/max, s(ummer)/w(inter); gov = governing
+    // combination, T = its temperature step; x to 0.1 m
+    const Ld = out.inp.Load;
+    const grp = [['temp', 'temp'], ['LM71', 'LM71'], ['SW', 'SW'], ['brk', 'brk'], ['acc', 'tra'], ['comb', 'comb']]
+        .filter(g => (g[0] !== 'LM71' || Ld.LM71) && (g[0] !== 'SW' || Ld.SW));
+    const diag = (name, x, S, qs, us, dec, fac, bold) => {
+        const hd = [{ v: 'x', s: 'bold' }], ud = ['m'], cols = [x.map(v => Math.round(v * 10) / 10)];
+        const p = Math.pow(10, dec), rnd = v => (isFinite(v) ? Math.round(fac * v * p) / p : null);
+        qs.forEach((q, iq) => {
+            const pre = q ? q + ' ' : '', get = o => (q ? o[q] : o);
+            for (const [k, n] of grp) for (let s = 0; s < 2; s++) {
+                const E = get(S[k]);
+                hd.push({ v: `${pre}${n} min,${'sw'[s]}`, s: 'bold' }, { v: `${pre}${n} max,${'sw'[s]}`, s: 'bold' });
+                cols.push(E.min[s].map(rnd), E.max[s].map(rnd));
+            }
+            for (let s = 0; s < 2; s++) {
+                hd.push({ v: `${pre}gov,${'sw'[s]}`, s: 'bold' }, { v: `${pre}T,${'sw'[s]}`, s: 'bold' });
+                cols.push(get(S.comb.gov)[s].map(rnd), get(S.comb.govTemp)[s].map(rnd));
+            }
+            for (let j = 0; j < 4 * grp.length + 4; j++) ud.push(us[iq]);
+        });
+        const rows = [hd, ud];
+        for (let i = 0; i < x.length; i++) {
+            const r = cols.map(c => c[i]);
+            rows.push(bold && bold.has(i) ? r.map(v => ({ v, s: 'bold' })) : r);
+        }
+        sheets.push({ name, rows, widths: hd.map(h => Math.max(6, String(h.v).length + 2)) });
+    };
+    const T = out.Track, Bk = out.Bridge, xb = Bk.x;
+    diag('Rail stress diagram', T.x, T, [''], ['MPa'], 1, 1);
+    const bold = new Set();                                        // deck ends and the rail seat nearest each bearing
+    xb.forEach((v, i) => { if (i === 0 || i === xb.length - 1 || Bk.xsup.some(s => Math.abs(v - s) < 1e-6)) bold.add(i); });
+    for (const s of Bk.xsup) {
+        let im = 0; xb.forEach((v, i) => { if (Math.abs(v - s) < Math.abs(xb[im] - s)) im = i; }); bold.add(im);
     }
-    for (let s = 0; s < 2; s++) {
-        hd.push(`governing combination ${sw[s]} (MPa)`, `its temperature step ${sw[s]} (MPa)`); cols.push(T.comb.gov[s], T.comb.govTemp[s]);
-    }
-    const drows = [hd.map(v => ({ v, s: 'bold' }))];
-    for (let i = 0; i < T.x.length; i++)
-        drows.push(cols.map((c, j) => (j === 0 ? Math.round(c[i] * 1e6) / 1e6 : (isFinite(c[i]) ? Math.round(c[i] * 10) / 10 : null))));
-    sheets.push({ name: 'Diagram data', rows: drows });
+    diag('Bridge SF diagram', xb, Bk.F, ['M', 'V', 'N'], ['kNm', 'kN', 'kN'], 0, 1e3, bold);
+    diag('Bridge disp diagram', xb, Bk.D, ['u', 'w', 'th'], ['mm', 'mm', 'mrad'], 1, 1, bold);
     const n = await saveBlob(XLSX.write(sheets), 'TBI_results.xlsx',
         [{ description: 'Excel', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }]);
     if (n) status('Exported: ' + n);
@@ -411,9 +463,9 @@ function today() {
     const d = new Date();
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
-function printMode(cls, noDialog) {
+function printMode(cls, noDialog, name) {
     const title = document.title;                                  // default PDF file name in the print dialog
-    document.title = cls === 'p-report' ? 'TBI-report' : 'TBI-diagrams';
+    document.title = name || (cls === 'p-report' ? 'TBI-report' : 'TBI_rail_stress');
     // A4 pages, date top right and "page (pages)" bottom centre (Chrome, Edge)
     $('pageStyle').textContent = '@page { size: A4; margin: 25mm; ' +
         `@top-right { content: "${today()}"; font: 10pt 'Times New Roman', serif; } ` +
@@ -427,7 +479,17 @@ function onPrintDiagrams() {
     if (!out) return;
     $('printDiag').innerHTML = [0, 1, 2].map(i =>
         `<div class="dg">${TBIPlot.diagram(out, i, 640, 310, 10, TBIPlot.dtitle(out, i))}</div>`).join('');
-    printMode('p-diag');
+    printMode('p-diag', false, 'TBI_rail_stress');
+}
+function bridgePrintHtml(kb) {
+    // deck forces (kb 0) or displacements (kb 1) of the three load cases, one A4 page each
+    return [1, 2, 3].map(lc => (lc > 1 ? '<div class="pgb"></div>' : '') + [0, 1, 2].map(i =>
+        `<div class="dg">${TBIPlot.bridge(out, lc, i, BK[kb], 640, 310, 10, TBIPlot.BT[BK[kb]][i] + ', ' + TBIPlot.LCN[lc - 1])}</div>`).join('')).join('');
+}
+function onPrintBridge(kb) {
+    if (!out) return;
+    $('printDiag').innerHTML = bridgePrintHtml(kb);
+    printMode('p-diag', false, kb ? 'TBI_bridge_disp' : 'TBI_bridge_SF');
 }
 
 const fmtN = x => String(+Number(x).toPrecision(3)).replace('-', '−');
@@ -445,7 +507,10 @@ function onReport() {
 function buildReport() {
     const B = out.inp.Bridge, T = out.inp.Track, Ld = out.inp.Load, M = out.Model, rb = out.Track.rbreak;
     const Kh = Array.isArray(B.Kh) ? B.Kh : [B.Kh];
-    const btyp = B.type === 'steel' ? 'Steel' : 'Concrete', styp = T.type === 'ballastless' ? 'ballastless' : 'ballasted';
+    let dtyp = String(B.type || '').toLowerCase();                 // steel, composite or concrete
+    if (!['steel', 'composite', 'concrete'].includes(dtyp)) dtyp = 'concrete';
+    const btyp = dtyp[0].toUpperCase() + dtyp.slice(1), styp = T.type === 'ballastless' ? 'ballastless' : 'ballasted';
+    const t0 = (B.T0 !== undefined && B.T0 !== null && isFinite(B.T0)) ? ` from <i>T</i><sub>0</sub> = ${fmtN(B.T0)} °C` : '';
     const pos = Ld.dxPos > 0 ? `in ${out.LoadPos.xloco.length} positions, step ${fmtN(Ld.dxPos)} m` : 'from the movable end bearing';
     const vl = [];
     if (Ld.LM71) vl.push('LM71 with the locomotive ' + pos);
@@ -462,7 +527,8 @@ function buildReport() {
          'ground on the embankments, by bilinear springs for unloaded and loaded track resistance and a vertical spring. Bearings are vertically fixed ' +
          'with a longitudinal spring at bearing level. Geometrically nonlinear analysis in two steps: temperature on unloaded track (step 1), then ' +
          'vertical traffic and braking or traction with loaded track resistance where vertical traffic acts (step 2). Load cases, summer and winter:</p><ul>' +
-         '<li>temperature;</li>' + (vl.length ? `<li>${vl.join(', ')};</li>` : '') +
+         `<li>temperature, ${dtyp} deck: Δ${S('T', 'N')} = ${sgnT(B.dT[0])} / ${sgnT(B.dT[1])} °C (summer / winter)${t0};</li>` +
+         (vl.length ? `<li>${vl.join(', ')};</li>` : '') +
          `<li>braking over ${fmtN(out.LoadPos.Lbrk)} m and traction over ${fmtN(out.LoadPos.Lacc)} m from either end, both directions` +
          (B.n_track === 2 ? ', braking on track 1 with traction on track 2' : '') + ';</li>' +
          '<li>load combination: temperature (step 1), vertical traffic with braking or traction (step 2);</li>' +
@@ -471,8 +537,10 @@ function buildReport() {
     h += `<div class="fig">${TBIPlot.model(out, 1150, 600, 16)}</div><div class="cap">Figure 1: 2D FE model: whole model (top), detail at support 1, ` +
          'track shear resistance per m of track and track vertical stiffness per sleeper (bottom), dimensions in m.</div>';
     // input
-    h += `<h2 class="pb">Input</h2><p>${btyp} bridge, ${B.n_track} track(s), ${styp} track. Spans and embankments are rounded to whole sleeper spacings in the model.</p>`;
-    const rowsB = [['Spans, <i>L</i>', M.L.map(v => v.toFixed(2)).join(' + '), 'm'], ['Cross-section area, ' + S('A', 'b'), fmtN(B.A), 'm²'],
+    h += `<h2 class="pb">Input</h2><p>${btyp} bridge, ${B.n_track} track(s), ${styp} track. In the model, the bridge length and the embankments ` +
+         'are whole sleeper spacings (a rail seat at each deck end); ' + S('L', 'end') + ' is rounded to the deck element length and the spans are ' +
+         'scaled to fit. <i>x</i> is measured from support 1.</p>';
+    const rowsB = [['Spans, <i>L</i> (model)', M.L.map(v => v.toFixed(2)).join(' + '), 'm'], ['Cross-section area, ' + S('A', 'b'), fmtN(B.A), 'm²'],
         ['Second moment of area, ' + S('I', 'b'), fmtN(B.I), 'm⁴'], ["Young's modulus, " + S('E', 'b'), fmtN(B.E / 1e9), 'GPa'],
         ['Thermal expansion, ' + S('α', 'b'), sci(B.alfa), '1/K'], ['Neutral axis to bearings, ' + S('e', 'b'), fmtN(B.e_b), 'm'],
         ['Bearings to top of rail, <i>h</i>', fmtN(B.h), 'm'], ['Deck end beyond the end bearings, ' + S('L', 'end') + ' (model)', fmtN(M.Ls), 'm'],
@@ -517,20 +585,28 @@ function initSymbols() {
     set('sRun', 'run', onRun); set('sReset', 'reset', onReset); set('sOpen', 'open', onOpen);
     set('sSave', 'save', onSave); set('sReport', 'print', onReport);
     set('sExport', 'excel', onExport); set('sPrint', 'print', onPrintDiagrams);
+    set('sPrintSF', 'print', () => onPrintBridge(0)); set('sPrintD', 'print', () => onPrintBridge(1));
+    $('lcSF').addEventListener('change', () => drawBridge(0));
+    $('lcD').addEventListener('change', () => drawBridge(1));
 }
 buildInputs();
 initSymbols();
 for (const d of FIELDS) if (d.kind !== 'out' && d.kind !== 'blank') setv(d.key, d.val);
 onChange('');
 let rt;
-if (/[?&](report|diagrams)\b/.test(location.search)) {           // test mode: run and show the print layout (headless PDF)
+if (/[?&](report|diagrams|bridgeSF|bridgeDisp)\b/.test(location.search)) {   // test mode: run and show the print layout (headless PDF)
     onRun().then(() => {
-        const rep = /report/.test(location.search);
-        if (rep) buildReport(); else $('printDiag').innerHTML = [0, 1, 2].map(i =>
+        const q = location.search, rep = /report/.test(q);
+        if (rep) buildReport();
+        else if (/bridgeSF/.test(q)) $('printDiag').innerHTML = bridgePrintHtml(0);
+        else if (/bridgeDisp/.test(q)) $('printDiag').innerHTML = bridgePrintHtml(1);
+        else $('printDiag').innerHTML = [0, 1, 2].map(i =>
             `<div class="dg">${TBIPlot.diagram(out, i, 640, 310, 10, TBIPlot.dtitle(out, i))}</div>`).join('');
-        printMode(rep ? 'p-report' : 'p-diag', true);
+        printMode(rep ? 'p-report' : 'p-diag', true,
+            rep ? '' : /bridgeSF/.test(q) ? 'TBI_bridge_SF' : /bridgeDisp/.test(q) ? 'TBI_bridge_disp' : 'TBI_rail_stress');
     });
 }
 window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(drawModel, 150); });
-window.TBIGUI = { run: onRun, reset: onReset, results: () => out, buildInp, P, saveBlob: f => (saveBlob = f), export: onExport };   // for tests
+window.TBIGUI = { run: onRun, reset: onReset, results: () => out, buildInp, P, saveBlob: f => (saveBlob = f), export: onExport,
+                  bridgePrintHtml, drawLoads };                    // for tests
 })();
