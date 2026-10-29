@@ -48,7 +48,10 @@
    OUTPUT of analysis (all x from support 1, left deck end at -x0):
      out.inp, out.Model {Lb, Ls, x0, Le, L, xsup, s_r, dL, dLd},
      out.Track {x (rail seats), onBr, sig_emb, temp/LM71/SW/brk/acc/comb:
-       {min, max} as [season][seat] (MPa), comb.gov, comb.govTemp, gap, rbreak},
+       {min, max} as [season][seat] (MPa), comb.gov, comb.govTemp, gap, rbreak,
+       rej}; comb = envelope of the combination with and without temperature;
+       with rail expansion joints (rej) temp is the total rail stress and comb
+       only without temperature (govTemp NaN), as TBI_fem.m
      out.Bridge {x (rail seats on the deck), xsup, dTemp, dB, dA, dH, dV as
        [season][left, right] (mm), wV [season][span] (largest deflection,
        mm), Rh.{group} as [season][support] (kN), F.{group}.N/M/V and
@@ -913,6 +916,8 @@ TBI.analysis = async function (inp0, opt) {
     // has x from the left deck end: xo is added only in the jobs of TBI.solve
     const xo = M.Ls, xsup = M.xsup.map(v => v - xo), xB = [-xo, Lb - xo];   // offset, bearings, deck ends (m)
     const sig_emb = T.dT.map(d => -T.E * T.alfa * d / 1e6);
+    const rej = T.gap.length > 0;                                 // rail expansion joints: temperature as total stress
+    const sub = sig_emb.map(v => rej ? 0 : v);                    // subtracted from the total rail stress (MPa)
     const TrS = [0, 1].map(k => lowlevel(inp, k));
     const Os = Object.assign({}, opt.solver || {});
     const workers = await getWorkers(opt);
@@ -952,7 +957,7 @@ TBI.analysis = async function (inp0, opt) {
 
     // progress, at most every DT_PROG ms (also the yield of the main thread)
     const nV = 2 * ((Ld.LM71 ? xl.length : 0) + (Ld.SW ? x0.length : 0));
-    let nTot = 3 + 3 + nV + 2 * H.length + 2 * 5 * H.length, pdone = 0, tProg = performance.now();
+    let nTot = 3 + 3 + nV + 2 * H.length + 4 * 5 * H.length, pdone = 0, tProg = performance.now();
     async function done() {
         nRun++;
         if (performance.now() - tProg < DT_PROG) return;
@@ -976,8 +981,8 @@ TBI.analysis = async function (inp0, opt) {
         const k = jb.k, temp = jb.temp;
         const r = { x: [], state1: R.state1 };
         for (let i = 0; i < R.ResTr1.x.length; i += 2) r.x.push(R.ResTr1.x[i] - M.Le - xo);   // rail seats
-        r.S = [R.ResTr1.Sr.map(s => atSeats(s).map(v => v / 1e6 - temp * sig_emb[k]))];   // [track][step][seat]
-        if (nt === 2) r.S.push(R.ResTr2.Sr.map(s => atSeats(s).map(v => v / 1e6 - temp * sig_emb[k])));
+        r.S = [R.ResTr1.Sr.map(s => atSeats(s).map(v => v / 1e6 - temp * sub[k]))];   // [track][step][seat]
+        if (nt === 2) r.S.push(R.ResTr2.Sr.map(s => atSeats(s).map(v => v / 1e6 - temp * sub[k])));
         const Bb = R.ResBr;
         r.dx = Bb.dx; r.dy = Bb.dy; r.xb = Bb.x.map(v => v - xo); r.Rh = Bb.Rh.map(v => v.map(f => f / 1e3));
         r.F = { N: Bb.N.map(v => v.map(f => f / 1e6)), M: Bb.M.map(v => v.map(f => f / 1e6)), V: Bb.V.map(v => v.map(f => f / 1e6)),
@@ -1136,11 +1141,12 @@ TBI.analysis = async function (inp0, opt) {
     for (const xb of xc)
         J2.push({ Tr: Object.assign({}, TrS[1].Tr, { brk: xb + xo }), Br: TrS[1].Br, Lk: Lw,
                   Os: Object.assign({}, Os, { state1: R1.state1 }) });
-    const iC = J2.length, CH = [];
+    const CH = [];
     for (let k = 0; k < 2; k++) for (const c of cv) for (const hh of H) {
         const [bp, ap] = hpos(hh, c.env);
+        CH.push({ k, c, hh, i: J2.length });
         J2.push(job(k, 1, c.seg, c.Lpos, bp, ap, hh.fb, hh.fa, tempR[k].state1));
-        CH.push({ k, c, hh });
+        J2.push(job(k, 0, c.seg, c.Lpos, bp, ap, hh.fb, hh.fa));   // the same at neutral temperature
     }
     nTot = nRun + J2.length;
     const R2all = await runJobs(J2, workers, done);
@@ -1153,37 +1159,47 @@ TBI.analysis = async function (inp0, opt) {
     Brk.wmax = Brk.w.length ? Math.max(...Brk.w) : NaN;
 
     // combination: temperature (step 1) + vertical traffic in the critical
-    // positions + braking/acceleration (step 2)
+    // positions + braking/acceleration (step 2), and the same at neutral
+    // temperature (step 1 empty): with the track resistance already yielded
+    // by the temperature, the variable loads may give less than at neutral
+    // temperature (short decks). Envelopes and the governing case over both.
+    // With rail expansion joints the rail stress is taken from the runs at
+    // neutral temperature only (with temperature it is a total stress), and
+    // the deck results of the governing case from its run with temperature
     const gov = [new Array(nr).fill(NaN), new Array(nr).fill(NaN)], govT = [new Array(nr).fill(NaN), new Array(nr).fill(NaN)];
-    const komb = [{ vert: '', H: '', u: 0 }, { vert: '', H: '', u: 0 }];
+    const komb = [{ vert: '', H: '', u: 0, temp: true }, { vert: '', H: '', u: 0, temp: true }];
     const ub = [-Infinity, -Infinity];
-    CH.forEach(({ k, c, hh }, j) => {
-        const rr = post(R2all[iC + j], J2[iC + j]);
-        addEnv(G.comb, rr.S, k);
-        addEnvB(GB.comb, rr, k);
-        Rh.comb[k] = smax(Rh.comb[k], rr.Rh[1]);
-        gapOpen.combMin[k] = gapOpen.combMin[k].map((v, i) => Math.min(v, rr.gap[i]));
-        gapOpen.combMax[k] = gapOpen.combMax[k].map((v, i) => Math.max(v, rr.gap[i]));
-        for (const St of rr.S) {
-            const s = St[1];
-            let mnB = Infinity, mxB = -Infinity, mnE = Infinity, mxE = -Infinity;
-            for (let i = 0; i < s.length; i++) {
-                if (isNaN(s[i])) continue;
-                if (onBr[i]) { mnB = Math.min(mnB, s[i]); mxB = Math.max(mxB, s[i]); }
-                else         { mnE = Math.min(mnE, s[i]); mxE = Math.max(mxE, s[i]); }
+    CH.forEach(({ k, c, hh, i: jc }) => {
+        const rc = [post(R2all[jc], J2[jc]), post(R2all[jc + 1], J2[jc + 1])];   // with / without temperature
+        rc.forEach((rr, m) => {
+            addEnvB(GB.comb, rr, k);
+            Rh.comb[k] = smax(Rh.comb[k], rr.Rh[1]);
+            gapOpen.combMin[k] = gapOpen.combMin[k].map((v, i) => Math.min(v, rr.gap[i]));
+            gapOpen.combMax[k] = gapOpen.combMax[k].map((v, i) => Math.max(v, rr.gap[i]));
+            r = rr;
+            if (rej && m === 0) return;                            // REJ: total stress, not checked
+            addEnv(G.comb, rr.S, k);
+            for (const St of rr.S) {
+                const s = St[1];
+                let mnB = Infinity, mxB = -Infinity, mnE = Infinity, mxE = -Infinity;
+                for (let i = 0; i < s.length; i++) {
+                    if (isNaN(s[i])) continue;
+                    if (onBr[i]) { mnB = Math.min(mnB, s[i]); mxB = Math.max(mxB, s[i]); }
+                    else         { mnE = Math.min(mnE, s[i]); mxE = Math.max(mxE, s[i]); }
+                }
+                const u = Math.max(mnB / Lim.sig_br[0], mxB / Lim.sig_br[1], mnE / Lim.sig_emb[0], mxE / Lim.sig_emb[1]);
+                if (u > ub[k]) {
+                    ub[k] = u; gov[k] = s.slice(); if (!rej) govT[k] = St[0].slice();
+                    const Fc = rej ? rc[0].F : rr.F;                // REJ: deck from the run with temperature
+                    for (const q of qB) { govB[q][k] = Fc[q][1].slice(); govBT[q][k] = Fc[q][0].slice(); }
+                    komb[k] = { vert: c.typ + ', x = ' + c.x.toFixed(2) + ' m (' + c.krit + ')', H: hh.name, u, temp: m === 0 };
+                }
             }
-            const u = Math.max(mnB / Lim.sig_br[0], mxB / Lim.sig_br[1], mnE / Lim.sig_emb[0], mxE / Lim.sig_emb[1]);
-            if (u > ub[k]) {
-                ub[k] = u; gov[k] = s.slice(); govT[k] = St[0].slice();
-                for (const q of qB) { govB[q][k] = rr.F[q][1].slice(); govBT[q][k] = rr.F[q][0].slice(); }
-                komb[k] = { vert: c.typ + ', x = ' + c.x.toFixed(2) + ' m (' + c.krit + ')', H: hh.name, u };
-            }
-        }
-        r = rr;
+        });
     });
 
     const out = { inp, Model: modelOut(M) };                      // x from support 1
-    out.Track = { x, onBr, sig_emb };
+    out.Track = { x, onBr, sig_emb, rej };
     for (const g of groups) out.Track[g] = G[g];
     out.Track.comb.gov = gov; out.Track.comb.govTemp = govT;
     out.Track.gap = gapOpen;
@@ -1220,13 +1236,17 @@ function table(out) {
     const sl = l => (l[0] >= 0 ? '+' : '−') + Math.abs(l[0]) + ' / ' + (l[1] >= 0 ? '+' : '−') + Math.abs(l[1]);
     const add = (group, name, unit, lim, val, limv) => rows.push({ group, name, unit, lim, val, limv: limv || [-Infinity, Infinity] });
     const all = br.map(() => true), emb = br.map(b => !b);
-    add('stress', 'Temperature', 'MPa', sl(Lim.sig_emb), mm(Tk.temp, all), Lim.sig_emb);
+    // with rail expansion joints: temperature as total stress (no limit),
+    // combination = variable loads at neutral temperature
+    if (Tk.rej) add('stress', 'Temperature (total stress)', 'MPa', '–', mm(Tk.temp, all));
+    else        add('stress', 'Temperature', 'MPa', sl(Lim.sig_emb), mm(Tk.temp, all), Lim.sig_emb);
+    const cn = Tk.rej ? 'Load combination w/o temperature, ' : 'Load combination, ';
     if (Ld.LM71) add('stress', 'LM71', 'MPa', '–', mm(Tk.LM71, all));
     if (Ld.SW)   add('stress', 'SW/0', 'MPa', '–', mm(Tk.SW, all));
     add('stress', 'Braking', 'MPa', '–', mm(Tk.brk, all));
     add('stress', 'Traction', 'MPa', '–', mm(Tk.acc, all));
-    add('stress', 'Load combination, bridge', 'MPa', sl(Lim.sig_br), mm(Tk.comb, br), Lim.sig_br);
-    add('stress', 'Load combination, embankment', 'MPa', sl(Lim.sig_emb), mm(Tk.comb, emb), Lim.sig_emb);
+    add('stress', cn + 'bridge', 'MPa', sl(Lim.sig_br), mm(Tk.comb, br), Lim.sig_br);
+    add('stress', cn + 'embankment', 'MPa', sl(Lim.sig_emb), mm(Tk.comb, emb), Lim.sig_emb);
     add('disp', '<i>δ</i><sub>B</sub> braking/traction, left / right', 'mm', String(Lim.dB),
         [0, 1].map(k => Bk.dB[k].map((v, i) => Math.max(v, Bk.dA[k][i]))), [-Infinity, Lim.dB]);
     if (Ld.LM71 || Ld.SW) {
