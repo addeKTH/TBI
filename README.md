@@ -43,7 +43,12 @@ a spring. The Load tab shows LM71 and SW/0 with dimensions. x = 0 at support 1 i
 (REJ position), results and diagrams. The model uses deck elements of `s_r/6`, rounds
 `L_end` and the bearing positions to that length and scales the spans so that the deck is
 a whole number of sleeper spacings; the input fields show the given values. Deck results
-are given at the rail seats. The deck temperature
+are given at the rail seats. The load combination is evaluated with the deck
+temperature (step 1) and without it (at neutral temperature the track resistance has not
+yielded, which can govern short decks); rows and diagram give the envelope of both. With
+rail expansion joints the rail temperature is included (empty field: ±50 K), the
+temperature case is shown as total rail stress (the additional stress is not defined at a
+joint) and the rail stress of the combination is checked without temperature. The deck temperature
 change follows EN 1991-1-5 6.1.3 and Figure 6.1 (AC:2009) unless "direct" is chosen.
 
 ## Files
