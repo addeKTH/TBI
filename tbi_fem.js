@@ -4,8 +4,12 @@
    complete analysis (all load cases, envelopes, critical positions).
    Andreas Andersson, 2026-10-28 (assisted by Claude)
 
-   MODEL: rail(s) and deck as beams in the vertical plane (u, w, theta per
-   node), element length s_r/2, von Karman membrane strain averaged over the
+   Updated 2026-10-29 to TBI_fem.m of the same date: deck elements
+   s_r/nDeck (6), spans scaled to whole sleeper spacings, x from support 1,
+   deck section forces and displacements, largest deflection, input check.
+
+   MODEL: rail(s) (element s_r/2) and deck (element s_r/nDeck) as beams in
+   the vertical plane (u, w, theta per node), von Karman membrane strain averaged over the
    element, rigid offsets deck neutral axis - bearings (e_b) and - track slip
    centre, and rail - slip centre (e_r). At every sleeper: horizontal shear
    springs for unloaded (set 1) and loaded track (set 2, born in step 2 where
@@ -28,22 +32,29 @@
    INPUT (SI units, default values as TBI_fem.m):
      inp.Bridge: L (array, m), E (Pa), A (m2), I (m4), e_b, h (m) required;
        type, alfa, L_end, n_track, FL (1-based), Kh (array N/m or law specs),
-       dT [summer, winter] (K), endsprings [{side, z, law}]
+       dT [summer, winter] (K), endsprings [{side, z, law}], nDeck (6), T0
+       (information for the report)
      inp.Track: type ('ballasted'/'ballastless'), A, I, E, alfa, e_r, s_r, Le,
        u0 [s, w] (m), Fu [s, w] (N/m), Fl (N/m), Kv, Kv_up (N/m), dT [s, w] (K),
-       gap (array of x, m), dT_brk (K), loaded ('additive'/'shifted'),
+       gap (array of x from support 1, m), dT_brk (K), loaded ('additive'/'shifted'),
        law1, law2, lawBr1, lawBr2, lawV (law specs)
      inp.Load: alfa, LM71, SW, dxPos, qlbk, Qlbk_max, qlak, Qlak_max
-     inp.Limits: sig_br, sig_emb [compression, tension] (MPa), dB, dH, dV, wgap (mm)
+     inp.Limits: sig_br, sig_emb [compression, tension] (MPa), dB, dH, dV, wgap (mm),
+       wL (largest deflection <= L/wL, 600)
    Law specs: number (linear stiffness) or ['linear', k], ['bilinear', u0, F],
      ['bilinear', u0, F, 'elastic'], ['curve', [[u, F], ...]],
      ['curve', tab, 'elastic', d0], ['curve', tab, 'plastic'].
 
-   OUTPUT of analysis: out.inp, out.Model {Lb, Ls, Le, L, xsup, s_r, dL},
+   OUTPUT of analysis (all x from support 1, left deck end at -x0):
+     out.inp, out.Model {Lb, Ls, x0, Le, L, xsup, s_r, dL, dLd},
      out.Track {x (rail seats), onBr, sig_emb, temp/LM71/SW/brk/acc/comb:
        {min, max} as [season][seat] (MPa), comb.gov, comb.govTemp, gap, rbreak},
-     out.Bridge {x, xsup, dTemp, dB, dA, dH, dV as [season][left, right] (mm),
-       Rh.{group} as [season][support] (kN)}, out.LoadPos, out.Table, out.Info.
+     out.Bridge {x (rail seats on the deck), xsup, dTemp, dB, dA, dH, dV as
+       [season][left, right] (mm), wV [season][span] (largest deflection,
+       mm), Rh.{group} as [season][support] (kN), F.{group}.N/M/V and
+       D.{group}.u/w/th {min, max} [season][x] (MN, MNm, mm, mrad), F.comb.gov
+       / govTemp and D.comb.gov / govTemp}, out.LoadPos, out.Table (rows with
+       dec = decimals when not the default), out.Info.
    Arrays indexed [season] are 0 = summer, 1 = winter.
 ---------------------------------------------------------------------------*/
 (function (root) {
@@ -62,7 +73,22 @@ const isMovable = k => typeof k === 'number' && k === 0;
 const asArray = v => (Array.isArray(v) ? v.slice() : (v == null ? [] : [v]));
 
 // ------------------------------------------------------------ DEFAULTS
+// TBI.defaults: input with defaults and the model geometry for the output
+// (x from support 1, as out.Model of the analysis); defaults0: internal
+// geometry (x from the left deck end)
 TBI.defaults = function (inp0) {
+    const d = defaults0(inp0);
+    return { inp: d.inp, Model: modelOut(d.Model) };
+};
+
+function modelOut(M) {
+    // model geometry for the output: x from support 1, deck ends at -x0 and Lb - x0
+    const Mo = Object.assign({}, M);
+    Mo.x0 = M.Ls;  Mo.xsup = M.xsup.map(v => v - M.Ls);
+    return Mo;
+}
+
+function defaults0(inp0) {
     const inp = clone(inp0 || {});
     if (!inp.Bridge) throw new Error('inp.Bridge is missing.');
     const miss = ['L', 'E', 'A', 'I', 'e_b', 'h'].filter(k => !has(inp.Bridge, k));
@@ -76,7 +102,7 @@ TBI.defaults = function (inp0) {
     if (Math.abs(B.E / 210e9 - 1) < 0.15) { typ = 'steel'; a = 12e-6; } else { typ = 'concrete'; a = 10e-6; }
     if (has(B, 'Ls') && !has(B, 'L_end')) B.L_end = B.Ls;
     delete B.Ls; delete B.Ls_dV;
-    setdef(B, { type: typ, alfa: a, L_end: 0, n_track: 1, FL: nsup, dT: [35, -35], endsprings: [] });
+    setdef(B, { type: typ, alfa: a, L_end: 0, n_track: 1, FL: nsup, dT: [35, -35], endsprings: [], nDeck: 6 });
     if (!has(B, 'Kh')) { B.Kh = new Array(nsup).fill(0); B.Kh[B.FL - 1] = 1e13; }
     B.endsprings = asArray(B.endsprings);                         // single object (e.g. from JSON) -> array
 
@@ -97,45 +123,96 @@ TBI.defaults = function (inp0) {
     setdef(inp.Load, { alfa: 1.33, LM71: true, SW: B.L.length > 1, dxPos: 0,
                        qlbk: 20e3, Qlbk_max: 6000e3, qlak: 33e3, Qlak_max: 1000e3 });
     const sl = bl ? [-112, 112] : [-72, 112];
-    setdef(inp.Limits, { sig_br: sl.slice(), sig_emb: sl.slice(), dB: 5, dH: 8, dV: 2, wgap: 50 });
+    setdef(inp.Limits, { sig_br: sl.slice(), sig_emb: sl.slice(), dB: 5, dH: 8, dV: 2, wL: 600, wgap: 50 });
     setdef(inp.Info, { name: 'Bro', author: '' });
+    check(inp, nsup);
 
     const { Tr, Br } = lowlevel(inp, 0);
     const g = geom(Tr, Br);
-    const M = { Lb: g.L_b, Ls: g.L_s, Le: g.L_e, L: g.L, s_r: T.s_r, dL: g.dL,
+    const M = { Lb: g.L_b, Ls: g.L_s, Le: g.L_e, L: g.L, s_r: T.s_r, dL: g.dL, dLd: g.dLd,
                 e_r2: B.h - T.e_r - B.e_b };
     M.xsup = [g.L_s];
     for (const l of g.L) M.xsup.push(M.xsup[M.xsup.length - 1] + l);
     if (M.e_r2 < 0)
         throw new Error('h - e_r - e_b = ' + M.e_r2.toFixed(3) +
                         ' m < 0: the track slip centre lies below the deck neutral axis.');
+    const lo = -M.Ls - M.Le + 2 * T.s_r, hi = M.Lb - M.Ls + M.Le - 2 * T.s_r;   // rail expansion joints, x from support 1
+    const bad = T.gap.filter(x => x <= lo || x >= hi);
+    if (bad.length)
+        throw new Error('Rail expansion joint at x = ' + bad.join(', ') + ' m outside the track model (' +
+                        lo.toFixed(1) + ' ... ' + hi.toFixed(1) + ' m from support 1).');
     return { inp, Model: M };
-};
+}
+
+function check(inp, nsup) {
+    // input check: all problems in one message (as tbi_check in TBI_fem.m)
+    const B = inp.Bridge, T = inp.Track, Ld = inp.Load, m = [];
+    const arr = v => (Array.isArray(v) ? v : [v]);
+    const pos  = v => arr(v).length > 0 && arr(v).every(x => typeof x === 'number' && isFinite(x) && x > 0);
+    const nneg = v => arr(v).length > 0 && arr(v).every(x => typeof x === 'number' && isFinite(x) && x >= 0);
+    if (!pos(B.L)) m.push('spans L must be > 0');
+    for (const f of ['E', 'A', 'I', 'h']) if (!pos(B[f])) m.push('Bridge.' + f + ' must be > 0');
+    if (!nneg(B.e_b)) m.push('e_b must be >= 0');
+    if (!nneg(B.L_end)) m.push('L_end must be >= 0');
+    if (![1, 2].includes(B.n_track)) m.push('n_track must be 1 or 2');
+    if (!(Number.isInteger(B.nDeck) && B.nDeck >= 1)) m.push('nDeck must be an integer >= 1');
+    if (!(Array.isArray(B.dT) && B.dT.length === 2 && B.dT.every(isFinite))) m.push('deck temperature change dT needs two finite values (summer, winter)');
+    const Kh = Array.isArray(B.Kh) ? B.Kh : [B.Kh];
+    if (Kh.length !== nsup) m.push('K_h needs ' + nsup + ' values (one per support), ' + Kh.length + ' given');
+    else if (Kh.some(k => typeof k === 'number' && !nneg(k))) m.push('K_h must be >= 0');
+    for (const f of ['s_r', 'A', 'I', 'E', 'Kv', 'Kv_up']) if (!pos(T[f])) m.push('Track.' + f + ' must be > 0');
+    if (!pos(T.u0) || !pos(T.Fu) || !pos(T.Fl)) m.push('track resistance u0, F_u and F_l must be > 0');
+    if (pos(T.s_r) && !(nneg(T.Le) && T.Le >= 5 * T.s_r)) m.push('L_e must be at least 5 s_r (' + (5 * T.s_r).toFixed(1) + ' m); 100 m is recommended');
+    if (!nneg(T.e_r)) m.push('e_r must be >= 0');
+    if (![...arr(T.dT), T.dT_brk].every(x => typeof x === 'number' && isFinite(x))) m.push('rail temperature changes must be finite');
+    if (!pos(Ld.alfa)) m.push('alpha must be > 0');
+    for (const f of ['qlbk', 'Qlbk_max', 'qlak', 'Qlak_max', 'dxPos']) if (!nneg(Ld[f])) m.push('Load.' + f + ' must be >= 0');
+    if (m.length) { const s = m.join('; ') + '.'; throw new Error(s[0].toUpperCase() + s.slice(1)); }
+}
 
 function lowlevel(inp, k) {
     // input of TBI.solve for season k (0 summer, 1 winter)
     const T = inp.Track, B = inp.Bridge;
     const Tr = { A: T.A, I: T.I, E: T.E, alfa: T.alfa, e: T.e_r, s_r: T.s_r, Le: T.Le,
                  u0: T.u0[k], Fh: T.Fu[k], Fh2: T.Fl, Kv: T.Kv, Kv_up: T.Kv_up,
-                 loaded: T.loaded, T0: 0, gap: T.gap.slice() };
+                 loaded: T.loaded, T0: 0 };
     for (const f of ['law1', 'law2', 'lawBr1', 'lawBr2', 'lawV']) if (has(T, f)) Tr[f] = T[f];
     const Br = { n_track: B.n_track, A: B.A, I: B.I, E: B.E, alfa: B.alfa, e: B.e_b, h: B.h,
-                 L: B.L.slice(), Ls: B.L_end, T0: 0, Kh: B.Kh };
+                 L: B.L.slice(), Ls: B.L_end, T0: 0, Kh: B.Kh, nDeck: B.nDeck };
     if (B.endsprings && B.endsprings.length) Br.endsprings = B.endsprings;
+    const L_s = geom(Tr, Br).L_s;
+    Tr.gap = T.gap.map(g => g + L_s);                             // input from support 1, low level from the deck end
     return { Tr, Br };
 }
 
 function geom(Track, Bridge) {
-    // element s_r/2; L_end and spans to s_r/2; bridge and embankments in
-    // whole sleeper spacings (the first span takes the difference)
+    // rail elements s_r/2 (as TBI.m), deck elements dLd = s_r/nDeck (nDeck
+    // default 2 as TBI.m); L_end rounded to dLd; bridge and embankments in
+    // whole sleeper spacings, a rail seat at each deck end.
+    // nDeck = 2: spans to dLd, the first span takes the difference;
+    // nDeck > 2: all spans scaled so that spans + 2 L_end = bridge length,
+    // bearing positions rounded to dLd. L_e2 = right embankment (= L_e)
     const s_r = Track.s_r, dL = s_r / 2;
-    const L_s = dL * Math.round(Bridge.Ls / dL);
-    const L = Bridge.L.map(l => dL * Math.round(l / dL));
-    const sum = L.reduce((a, b) => a + b, 0);
-    const L_b = s_r * Math.round((sum + 2 * L_s) / s_r);
-    L[0] -= (sum + 2 * L_s) - L_b;
+    const nDk = has(Bridge, 'nDeck') ? Bridge.nDeck : 2, dLd = s_r / nDk;
+    const L_s = dLd * Math.round(Bridge.Ls / dLd);
     const L_e = s_r * Math.round(Track.Le / s_r);
-    return { dL, L_s, L, L_b, L_e };
+    let L, L_b;
+    if (nDk === 2) {
+        L = Bridge.L.map(l => dLd * Math.round(l / dLd));
+        const sum = L.reduce((a, b) => a + b, 0);
+        L_b = s_r * Math.round((sum + 2 * L_s) / s_r);
+        L[0] -= (sum + 2 * L_s) - L_b;
+    } else {
+        const L0 = Bridge.L, sum0 = L0.reduce((a, b) => a + b, 0);
+        L_b = s_r * Math.round((sum0 + 2 * L_s) / s_r);
+        const S = L_b - 2 * L_s;                                  // sum of the spans in the model
+        let c = 0;
+        const cs = L0.map(l => { c += l; return dLd * Math.round(c * S / sum0 / dLd); });
+        cs[cs.length - 1] = S;                                    // bearing positions from bearing 1
+        L = cs.map((v, i) => v - (i ? cs[i - 1] : 0));
+    }
+    const L_e2 = L_e + s_r * Math.ceil(L_b / s_r - 1e-9) - L_b;
+    return { dL, L_s, L, L_b, L_e, dLd, L_e2 };
 }
 
 // ------------------------------------------------------------ SPRING LAWS
@@ -305,18 +382,18 @@ function lineload(fe, e0, ne, dL, X, q, comp) {
 TBI.solve = function (Track, Bridge, Load, Opt0) {
     const Opt = Object.assign({ geomNL: true, nInc: [1, 1], tol: 1e-9, maxIt: 60, maxBisect: 8,
                                 lineSearch: true, solviaOffset: false, roundLoads: false }, Opt0 || {});
-    const { dL, L_s, L, L_b, L_e } = geom(Track, Bridge);
-    const s_r = Track.s_r, Ltot = 2 * L_e + L_b;
+    const { dL, L_s, L, L_b, L_e, dLd, L_e2 } = geom(Track, Bridge);   // rail elements dL, deck elements dLd
+    const s_r = Track.s_r, Ltot = L_e + L_b + L_e2;
     const h = Math.max(2e-3, Bridge.h), e_b = Math.max(1e-3, Bridge.e);
     const e_r1 = Track.e, e_r2 = h - e_r1 - e_b;
     const nt = Bridge.n_track || 1;
     const K_v = has(Track, 'Kpad') ? Track.Kpad : Track.Kv;
     const shifted = String(Track.loaded || '').toLowerCase() === 'shifted';
 
-    const nr = Math.round(Ltot / dL) + 1, nd = Math.round(L_b / dL) + 1;
+    const nr = Math.round(Ltot / dL) + 1, nd = Math.round(L_b / dLd) + 1;
     const nn = nt * nr + nd, ndof = 3 * nn;
     const rn = (k, x) => k * nr + Math.round(x / dL);              // rail node (0-based) of track k at global x
-    const dn = x => nt * nr + Math.round((x - L_e) / dL);          // deck node at global x
+    const dn = x => nt * nr + Math.round((x - L_e) / dLd);         // deck node at global x
     const xsup = [L_e + L_s];
     for (const l of L) xsup.push(xsup[xsup.length - 1] + l);
     const nsup = xsup.length;
@@ -324,7 +401,7 @@ TBI.solve = function (Track, Bridge, Load, Opt0) {
     // equation numbers: nodes sorted by x (rails and deck interleaved) -> narrow band
     const nodeX = new Float64Array(nn), nodeKind = new Int32Array(nn);
     for (let k = 0; k < nt; k++) for (let i = 0; i < nr; i++) { nodeX[k * nr + i] = i * dL; nodeKind[k * nr + i] = k; }
-    for (let i = 0; i < nd; i++) { nodeX[nt * nr + i] = L_e + i * dL; nodeKind[nt * nr + i] = nt; }
+    for (let i = 0; i < nd; i++) { nodeX[nt * nr + i] = L_e + i * dLd; nodeKind[nt * nr + i] = nt; }
     const order = Array.from({ length: nn }, (_, i) => i)
         .sort((p, q) => (nodeX[p] - nodeX[q]) || (nodeKind[p] - nodeKind[q]));
     const eqOfNode = new Int32Array(nn);
@@ -363,11 +440,13 @@ TBI.solve = function (Track, Bridge, Load, Opt0) {
         const n1 = eN1[e];
         return [dof(n1, 0), dof(n1, 1), dof(n1, 2), dof(n1 + 1, 0), dof(n1 + 1, 1), dof(n1 + 1, 2)];
     });
-    const iw = [1, 2, 4, 5], l = dL;
-    const Gm = [[36, 3 * l, -36, 3 * l], [3 * l, 4 * l * l, -3 * l, -l * l],
-                [-36, -3 * l, 36, -3 * l], [3 * l, -l * l, -3 * l, 4 * l * l]].map(r => r.map(v => v / (30 * l)));
-    const Kb = [[12, 6 * l, -12, 6 * l], [6 * l, 4 * l * l, -6 * l, 2 * l * l],
-                [-12, -6 * l, 12, -6 * l], [6 * l, 2 * l * l, -6 * l, 4 * l * l]].map(r => r.map(v => v / (l * l * l)));
+    const iw = [1, 2, 4, 5];
+    const gmf = l => [[36, 3 * l, -36, 3 * l], [3 * l, 4 * l * l, -3 * l, -l * l],
+                      [-36, -3 * l, 36, -3 * l], [3 * l, -l * l, -3 * l, 4 * l * l]].map(r => r.map(v => v / (30 * l)));
+    const kbf = l => [[12, 6 * l, -12, 6 * l], [6 * l, 4 * l * l, -6 * l, 2 * l * l],
+                      [-12, -6 * l, 12, -6 * l], [6 * l, 2 * l * l, -6 * l, 4 * l * l]].map(r => r.map(v => v / (l * l * l)));
+    const LG = [dL, dLd], GmG = [gmf(dL), gmf(dLd)], KbG = [kbf(dL), kbf(dLd)];   // element groups: rails, deck
+    const grpE = e => (e < nt * ner ? 0 : 1);
 
     // traffic loads (step 2), equivalent nodal forces per element
     const ftr = Array.from({ length: ne }, () => new Float64Array(6));
@@ -392,7 +471,15 @@ TBI.solve = function (Track, Bridge, Load, Opt0) {
     const xs = Array.from({ length: nseg + 1 }, (_, p) => p * s_r);
     const onBr = xs.map(x => x >= L_e - 1e-9 && x <= L_e + L_b + 1e-9);
     const law1 = has(Track, 'law1') ? mklaw(Track.law1) : law('bilinear', Track.u0, Track.Fh);
-    const law2 = has(Track, 'law2') ? mklaw(Track.law2) : law('bilinear', Track.u0, Track.Fh2 - Track.Fh);
+    let law2;
+    if (has(Track, 'law2')) law2 = mklaw(Track.law2);
+    else if (Track.Fh2 - Track.Fh > 0) law2 = law('bilinear', Track.u0, Track.Fh2 - Track.Fh);
+    else if (Track.Fh2 === Track.Fh) law2 = law('linear', 0);         // loaded = unloaded resistance: no addition
+    else throw new Error('Loaded track resistance (' + (Track.Fh2 / 1e3).toFixed(0) + ' kN/m) below the unloaded (' +
+                         (Track.Fh / 1e3).toFixed(0) + ' kN/m).');
+    if (!has(Track, 'lawV') && has(Track, 'Kv_up') && Track.Kv_up !== null && Track.Kv_up <= 0)
+        throw new Error('Vertical stiffness in uplift Kv_up must be > 0 (the rail weight is not modelled, ' +
+                        'with Kv_up = 0 the rail can lift freely); use e.g. 0.05 Kv.');
     const lawB1 = has(Track, 'lawBr1') ? mklaw(Track.lawBr1) : law1;
     const lawB2 = has(Track, 'lawBr2') ? mklaw(Track.lawBr2) : law2;
     let lawV;
@@ -461,6 +548,7 @@ TBI.solve = function (Track, Bridge, Load, Opt0) {
         const fint = new Float64Array(ndof), N = new Float64Array(ne);
         const fes = Kband === 'fe' ? [] : null;
         for (let e = 0; e < ne; e++) {
+            const ge = grpE(e), l = LG[ge], Gm = GmG[ge], Kb = KbG[ge];   // own element length per group
             const ed = eD[e];
             const de = ed.map(d => U[d]);
             const dw = [de[1], de[2], de[4], de[5]];
@@ -572,8 +660,12 @@ TBI.solve = function (Track, Bridge, Load, Opt0) {
                 }
             }
             U = Ut; R = Rt; rn0 = rt;
-            ok = rn0 <= Opt.tol * Fref ||
-                 (eta * norm(du, false) <= 1e-10 * Math.max(norm(U, false), 1e-6) && rn0 <= 1e-6 * Fref);
+            // converged: residual small, or at the round-off floor (stiff
+            // springs, short stiff deck elements times the deflection):
+            // negligible update and residual below 1e-6 (1e-4) of the load
+            const nu = eta * norm(du, false), nU = Math.max(norm(U, false), 1e-6);
+            ok = rn0 <= Opt.tol * Fref || (nu <= 1e-10 * nU && rn0 <= 1e-6 * Fref) ||
+                 (nu <= 1e-8 * nU && rn0 <= 1e-4 * Fref);
         }
         return { U, dp: sres.dpT, al: sres.alT, ok, it };
     }
@@ -674,12 +766,25 @@ TBI.solve = function (Track, Bridge, Load, Opt0) {
         }
         ResTr.push(T);
     }
-    const qn = [];
-    for (let i = 0; i < nd; i += 2) qn.push(nt * nr + i);
+    const nsd = Math.round(s_r / dLd), iq = [];                     // deck nodes at the rail seats (incl. both deck ends)
+    for (let i = 0; i < nd; i += nsd) iq.push(i);
+    const qn = iq.map(i => nt * nr + i);
+    // section forces per node: deck element starting there, last node: end
+    // of the last element (as TBI_fem.m: N, V = [Fe2; -Fe5(end)], M = [-Fe3; Fe6(end)])
+    const NVM = Ust.map((Us, st) => {
+        const el = elem(Us, tF[st + 1], 'fe'), e0 = nt * ner;
+        const N = [], V = [], Mm = [];
+        for (let i = 0; i < ned; i++) { const f = el.fes[e0 + i]; N.push(el.N[e0 + i]); V.push(f[1]); Mm.push(-f[2]); }
+        const fl = el.fes[e0 + ned - 1];
+        N.push(el.N[e0 + ned - 1]); V.push(-fl[4]); Mm.push(fl[5]);
+        return { N: iq.map(i => N[i]), V: iq.map(i => V[i]), M: iq.map(i => Mm[i]) };
+    });
     const ResBr = {
-        x: qn.map((_, j) => 2 * j * dL),
+        x: iq.map(i => i * dLd),
         dx: Ust.map(Us => qn.map(q => Us[dof(q, 0)] - e_r2 * Us[dof(q, 2)])),
         dy: Ust.map(Us => qn.map(q => Us[dof(q, 1)])),
+        th: Ust.map(Us => qn.map(q => Us[dof(q, 2)])),
+        N: NVM.map(r => r.N), V: NVM.map(r => r.V), M: NVM.map(r => r.M),
         thsup: Ust.map(Us => xsup.map(x => Us[dof(dn(x), 2)])),
         Rh: Fsp.map(f => sp.map((s, i) => (s.kind === 4 ? -f[i] : null)).filter(v => v !== null)),
         Res: Fsp.map(f => sp.map((s, i) => (s.kind === 5 ? f[i] : null)).filter(v => v !== null))
@@ -702,8 +807,9 @@ function atSeats(S) {
 
 function smax(a, b) { return a.map((v, i) => (Math.abs(b[i]) > Math.abs(v) ? b[i] : v)); }
 
-function clipseg(rows, Lb, q, lmin) {
-    return rows.map(r => [Math.min(Math.max(r[0], 0), Lb), Math.min(Math.max(r[1], 0), Lb)])
+function clipseg(rows, xB, q, lmin) {
+    // load segments clipped to the bridge xB[0]..xB[1], shorter than lmin removed
+    return rows.map(r => [Math.min(Math.max(r[0], xB[0]), xB[1]), Math.min(Math.max(r[1], xB[0]), xB[1])])
                .filter(r => r[1] - r[0] >= lmin).map(r => [r[0], r[1], q]);
 }
 
@@ -800,9 +906,12 @@ async function runJobs(jobs, workers, done) {
 TBI.analysis = async function (inp0, opt) {
     opt = opt || {};
     const t0 = performance.now();
-    const { inp, Model: M } = TBI.defaults(inp0);
+    const { inp, Model: M } = defaults0(inp0);
     const B = inp.Bridge, T = inp.Track, Ld = inp.Load, Lim = inp.Limits;
     const Lb = M.Lb, nsup = M.xsup.length, nt = B.n_track, alfa = Ld.alfa;
+    // x from support 1 throughout; the low-level solver (TBI.solve, as TBI.m)
+    // has x from the left deck end: xo is added only in the jobs of TBI.solve
+    const xo = M.Ls, xsup = M.xsup.map(v => v - xo), xB = [-xo, Lb - xo];   // offset, bearings, deck ends (m)
     const sig_emb = T.dT.map(d => -T.E * T.alfa * d / 1e6);
     const TrS = [0, 1].map(k => lowlevel(inp, k));
     const Os = Object.assign({}, opt.solver || {});
@@ -812,19 +921,18 @@ TBI.analysis = async function (inp0, opt) {
     // load arrangements
     const qvk = 80e3, aLoco = 6.4, qloco = 4 * 250e3 / aLoco - qvk;
     const qSW = 133e3, aSW = 15, cSW = 5.3, lSW = 2 * aSW + cSW;
-    const segLM = x => [[0, Lb, alfa * qvk], [Math.max(0, x), Math.min(Lb, x + aLoco), alfa * qloco]];
-    const segSW = x => clipseg([[x, x + aSW], [x + aSW + cSW, x + lSW]], Lb, alfa * qSW, 2 * T.s_r);
+    const segLM = x => [[xB[0], xB[1], alfa * qvk], [Math.max(xB[0], x), Math.min(xB[1], x + aLoco), alfa * qloco]];
+    const segSW = x => clipseg([[x, x + aSW], [x + aSW + cSW, x + lSW]], xB, alfa * qSW, 2 * T.s_r);
     const Kh = Array.isArray(B.Kh) ? B.Kh : new Array(nsup).fill(B.Kh);
     const mov = [isMovable(Kh[0]), isMovable(Kh[nsup - 1])];
     let xl, x0;
-    if (!mov[0] && mov[1]) { xl = [M.xsup[nsup - 1] - aLoco]; x0 = [M.xsup[nsup - 1] - lSW]; }
-    else { xl = [M.xsup[0]]; x0 = [M.xsup[0]]; }
-    if (Ld.dxPos > 0) {
-        xl = [];
-        for (let x = 0; x <= Math.max(0, Lb - aLoco) + 1e-9; x += Ld.dxPos) xl.push(x);
-        if (Lb - aLoco - xl[xl.length - 1] > 1e-6) xl.push(Lb - aLoco);
-        x0 = [];
-        for (let x = -lSW; x <= Lb + 1e-9; x += Ld.dxPos) if (segSW(x).length) x0.push(x);
+    if (!mov[0] && mov[1]) { xl = [xsup[nsup - 1] - aLoco]; x0 = [xsup[nsup - 1] - lSW]; }
+    else { xl = [xsup[0]]; x0 = [xsup[0]]; }
+    if (Ld.dxPos > 0) {                                           // moving loads, start of the load (m)
+        const colon = (a, d, b) => { const v = []; for (let i = 0; a + i * d <= b + 1e-9; i++) v.push(a + i * d); return v; };
+        xl = colon(xB[0], Ld.dxPos, Math.max(xB[0], xB[1] - aLoco));
+        if (xB[1] - aLoco - xl[xl.length - 1] > 1e-6) xl.push(xB[1] - aLoco);
+        x0 = colon(xB[0] - lSW, Ld.dxPos, xB[1]).filter(x => segSW(x).length);
     }
     const Lbrk = Math.min(Lb, Ld.Qlbk_max / Ld.qlbk), Lacc = Math.min(Lb, Ld.Qlak_max / Ld.qlak);
     const H = [];
@@ -857,20 +965,25 @@ TBI.analysis = async function (inp0, opt) {
     }
 
     // one load case: job for TBI.solve and the processing of its result
+    // (positions from support 1, to the deck end (+ xo) for TBI.solve)
+    const sh = rows => rows.map(r => [r[0] + xo, r[1] + xo].concat(r.slice(2)));
     const job = (k, temp, Seg, Lpos, bp, ap, fb, fa, S1) => ({
         k, temp, Tr: TrS[k].Tr, Br: TrS[k].Br,
-        Lk: { TD: temp * B.dT[k], TR: temp * T.dT[k], Seg, LoadedPos: Lpos,
-              qlbk: alfa * Ld.qlbk * fb, BrkPos: bp, qlak: alfa * Ld.qlak * fa, AccPos: ap },
+        Lk: { TD: temp * B.dT[k], TR: temp * T.dT[k], Seg: sh(Seg), LoadedPos: sh(Lpos),
+              qlbk: alfa * Ld.qlbk * fb, BrkPos: sh(bp), qlak: alfa * Ld.qlak * fa, AccPos: sh(ap) },
         Os: S1 ? Object.assign({}, Os, { state1: S1 }) : Os });
     function post(R, jb) {
         const k = jb.k, temp = jb.temp;
         const r = { x: [], state1: R.state1 };
-        for (let i = 0; i < R.ResTr1.x.length; i += 2) r.x.push(R.ResTr1.x[i] - M.Le);
+        for (let i = 0; i < R.ResTr1.x.length; i += 2) r.x.push(R.ResTr1.x[i] - M.Le - xo);   // rail seats
         r.S = [R.ResTr1.Sr.map(s => atSeats(s).map(v => v / 1e6 - temp * sig_emb[k]))];   // [track][step][seat]
         if (nt === 2) r.S.push(R.ResTr2.Sr.map(s => atSeats(s).map(v => v / 1e6 - temp * sig_emb[k])));
-        r.dx = R.ResBr.dx; r.dy = R.ResBr.dy; r.xb = R.ResBr.x; r.Rh = R.ResBr.Rh.map(v => v.map(f => f / 1e3));
-        r.gap = T.gap.map(g => {
-            const ie = Math.round((g + M.Le) / M.dL);
+        const Bb = R.ResBr;
+        r.dx = Bb.dx; r.dy = Bb.dy; r.xb = Bb.x.map(v => v - xo); r.Rh = Bb.Rh.map(v => v.map(f => f / 1e3));
+        r.F = { N: Bb.N.map(v => v.map(f => f / 1e6)), M: Bb.M.map(v => v.map(f => f / 1e6)), V: Bb.V.map(v => v.map(f => f / 1e6)),
+                u: Bb.dx.map(v => v.map(f => 1e3 * f)), w: Bb.dy.map(v => v.map(f => 1e3 * f)), th: Bb.th.map(v => v.map(f => 1e3 * f)) };
+        r.gap = T.gap.map(g => {                                   // opening of the rail expansion joint
+            const ie = Math.round((g + xo + M.Le) / M.dL);
             return 1e3 * (R.ResTr1.dx[1][ie + 1] - R.ResTr1.dx[1][ie]);
         });
         return r;
@@ -880,7 +993,7 @@ TBI.analysis = async function (inp0, opt) {
     // sweeps, braking/acceleration; all independent
     const Lw = { TD: B.dT[1], TR: T.dT_brk, Seg: [], LoadedPos: [], qlbk: 0, BrkPos: [], qlak: 0, AccPos: [] };
     const sweeps = [];
-    if (Ld.LM71) sweeps.push({ typ: 'LM71', xp: xl, segf: segLM, envf: () => [[0, Lb]], g: 'LM71' });
+    if (Ld.LM71) sweeps.push({ typ: 'LM71', xp: xl, segf: segLM, envf: () => [xB], g: 'LM71' });
     if (Ld.SW) sweeps.push({ typ: 'SW/0', xp: x0, segf: segSW, envf: segSW, g: 'SW' });
     const J1 = [job(0, 1, [], [], [], [], 0, 0), job(1, 1, [], [], [], [], 0, 0),
                 { Tr: TrS[1].Tr, Br: TrS[1].Br, Lk: Lw, Os }];
@@ -890,8 +1003,8 @@ TBI.analysis = async function (inp0, opt) {
     }
     const iH = J1.length;
     for (let k = 0; k < 2; k++) for (const hh of H) {
-        const [bp, ap] = hpos(hh, [0, Lb]);
-        J1.push(job(k, 0, [], [[0, Lb]], bp, ap, hh.fb, hh.fa));
+        const [bp, ap] = hpos(hh, xB);
+        J1.push(job(k, 0, [], [xB], bp, ap, hh.fb, hh.fa));
     }
     const R1all = await runJobs(J1, workers, done);
 
@@ -899,13 +1012,30 @@ TBI.analysis = async function (inp0, opt) {
     const tempR = [post(R1all[0], J1[0]), post(R1all[1], J1[1])];
     let r = tempR[0];
     const x = r.x, nr = x.length;
-    const onBr = x.map(v => v > -1e-9 && v < Lb + 1e-9);
+    const onBr = x.map(v => v > xB[0] - 1e-9 && v < xB[1] + 1e-9);   // rail seats, bridge incl. its end seats
     const groups = ['temp', 'LM71', 'SW', 'brk', 'acc', 'comb'];
-    const G = {}, Rh = {};
+    const qB = ['N', 'M', 'V', 'u', 'w', 'th'];                   // deck forces and displacements at the rail seats
+    const nbx = r.xb.length, nan2 = n => [new Array(n).fill(NaN), new Array(n).fill(NaN)];
+    const G = {}, Rh = {}, GB = {};
     for (const g of groups) {
-        G[g] = { min: [new Array(nr).fill(NaN), new Array(nr).fill(NaN)], max: [new Array(nr).fill(NaN), new Array(nr).fill(NaN)] };
+        G[g] = { min: nan2(nr), max: nan2(nr) };
         Rh[g] = [new Array(nsup).fill(0), new Array(nsup).fill(0)];
+        GB[g] = {};
+        for (const q of qB) GB[g][q] = { min: nan2(nbx), max: nan2(nbx) };
     }
+    const govB = {}, govBT = {};                                  // governing combination
+    for (const q of qB) { govB[q] = nan2(nbx); govBT[q] = nan2(nbx); }
+    const addEnvB = (E, rr, k) => {                               // envelopes of the deck forces in step 2
+        for (const q of qB) {
+            const s = rr.F[q][1];
+            for (let i = 0; i < s.length; i++) {
+                if (!(s[i] >= E[q].min[k][i])) E[q].min[k][i] = s[i];
+                if (!(s[i] <= E[q].max[k][i])) E[q].max[k][i] = s[i];
+            }
+        }
+    };
+    const nsp = nsup - 1, wV = [new Array(nsp).fill(0), new Array(nsp).fill(0)];   // largest deflection per span (mm)
+    const inSp = Array.from({ length: nsp }, (_, i) => r.xb.map(v => v >= xsup[i] - 1e-9 && v <= xsup[i + 1] + 1e-9));
     const z2 = () => [[0, 0], [0, 0]];
     const dTemp = z2(), dB = z2(), dA = z2(), dH = z2(), dV = z2();
     const ng = T.gap.length;
@@ -926,6 +1056,7 @@ TBI.analysis = async function (inp0, opt) {
     for (let k = 0; k < 2; k++) {
         r = tempR[k];
         addEnv(G.temp, r.S, k);
+        addEnvB(GB.temp, r, k);
         Rh.temp[k] = r.Rh[1].slice();
         dTemp[k] = ends(r.dx[1]).map(v => 1e3 * v);
         gapOpen.temp[k] = r.gap.slice();
@@ -933,14 +1064,14 @@ TBI.analysis = async function (inp0, opt) {
 
     // rail break, CEN/TR 17231 A.2: candidate positions from the intact rail
     const R1 = R1all[2];
-    const xr1 = R1.ResTr1.x.map(v => v - M.Le), s1 = R1.ResTr1.Sr[0].slice();
+    const xr1 = R1.ResTr1.x.map(v => v - M.Le - xo), s1 = R1.ResTr1.Sr[0].slice();
     s1[s1.length - 1] = NaN;
     let im = -1, best = -Infinity;
-    for (let i = 0; i < s1.length; i++) {
-        if (!isFinite(s1[i]) || Math.abs(xr1[i] - Lb / 2) > Lb / 2 + M.Le / 2) continue;
+    for (let i = 0; i < s1.length; i++) {                         // bridge and the inner half of the embankments
+        if (!isFinite(s1[i]) || Math.abs(xr1[i] - (xB[0] + xB[1]) / 2) > Lb / 2 + M.Le / 2) continue;
         if (s1[i] > best) { best = s1[i]; im = i; }
     }
-    let xc = [0, Lb].concat(im >= 0 ? [xr1[im]] : []).map(v => M.dL * Math.round(v / M.dL));
+    let xc = xB.concat(im >= 0 ? [xr1[im]] : []).map(v => M.dL * Math.round((v + xo) / M.dL) - xo);   // rail element start
     xc = Array.from(new Set(xc.map(v => +v.toFixed(9)))).sort((a, b) => a - b);
     if (T.gap.length) xc = xc.filter(v => T.gap.every(g => Math.abs(v - g) > 2 * T.s_r));
     const Brk = { x: xc, w: [], S0: atSeats(R1.ResTr1.Sr[0]).map(v => v / 1e6), S: [], dT_R: T.dT_brk, dT_B: B.dT[1],
@@ -958,6 +1089,12 @@ TBI.analysis = async function (inp0, opt) {
             for (let iv = 0; iv < xp.length; iv++, ij++) {
                 const rv = post(R1all[ij], J1[ij]);
                 addEnv(G[g], rv.S, kv);
+                addEnvB(GB[g], rv, kv);
+                for (let isp = 0; isp < nsp; isp++) {               // deflection (downward), per span
+                    let w = -Infinity;
+                    rv.dy[1].forEach((v, j) => { if (inSp[isp][j] && -v > w) w = -v; });
+                    wV[kv][isp] = Math.max(wV[kv][isp], 1e3 * w);
+                }
                 Rh[g][kv] = smax(Rh[g][kv], rv.Rh[1]);
                 const dhv = ends(rv.dx[1]).map(v => 1e3 * v);
                 dH[kv] = dH[kv].map((v, i) => Math.max(v, Math.abs(dhv[i])));
@@ -980,13 +1117,14 @@ TBI.analysis = async function (inp0, opt) {
     }
     const seen = new Set();
     let cv = crit.filter(c => { const key = c.typ + '_' + c.x.toFixed(4); if (seen.has(key)) return false; seen.add(key); return true; });
-    if (!cv.length) cv = [{ typ: 'no vertical load', x: 0, krit: '', season: '', seg: [], Lpos: [[0, Lb]], env: [0, Lb] }];
+    if (!cv.length) cv = [{ typ: 'no vertical load', x: 0, krit: '', season: '', seg: [], Lpos: [xB], env: xB }];
 
     // braking and acceleration on loaded track, no vertical load
     ij = iH;
     for (let k = 0; k < 2; k++) for (const hh of H) {
         const rr = post(R1all[ij], J1[ij]); ij++;
         const d = ends(rr.dx[1]).map(v => 1e3 * Math.abs(v));
+        addEnvB(hh.fb !== 0 ? GB.brk : GB.acc, rr, k);
         if (hh.fb !== 0) { addEnv(G.brk, rr.S, k); dB[k] = dB[k].map((v, i) => Math.max(v, d[i])); Rh.brk[k] = smax(Rh.brk[k], rr.Rh[1]); }
         else             { addEnv(G.acc, rr.S, k); dA[k] = dA[k].map((v, i) => Math.max(v, d[i])); Rh.acc[k] = smax(Rh.acc[k], rr.Rh[1]); }
         r = rr;
@@ -996,7 +1134,7 @@ TBI.analysis = async function (inp0, opt) {
     // taken from round 1 (identical step 1)
     const J2 = [];
     for (const xb of xc)
-        J2.push({ Tr: Object.assign({}, TrS[1].Tr, { brk: xb }), Br: TrS[1].Br, Lk: Lw,
+        J2.push({ Tr: Object.assign({}, TrS[1].Tr, { brk: xb + xo }), Br: TrS[1].Br, Lk: Lw,
                   Os: Object.assign({}, Os, { state1: R1.state1 }) });
     const iC = J2.length, CH = [];
     for (let k = 0; k < 2; k++) for (const c of cv) for (const hh of H) {
@@ -1022,6 +1160,7 @@ TBI.analysis = async function (inp0, opt) {
     CH.forEach(({ k, c, hh }, j) => {
         const rr = post(R2all[iC + j], J2[iC + j]);
         addEnv(G.comb, rr.S, k);
+        addEnvB(GB.comb, rr, k);
         Rh.comb[k] = smax(Rh.comb[k], rr.Rh[1]);
         gapOpen.combMin[k] = gapOpen.combMin[k].map((v, i) => Math.min(v, rr.gap[i]));
         gapOpen.combMax[k] = gapOpen.combMax[k].map((v, i) => Math.max(v, rr.gap[i]));
@@ -1036,19 +1175,27 @@ TBI.analysis = async function (inp0, opt) {
             const u = Math.max(mnB / Lim.sig_br[0], mxB / Lim.sig_br[1], mnE / Lim.sig_emb[0], mxE / Lim.sig_emb[1]);
             if (u > ub[k]) {
                 ub[k] = u; gov[k] = s.slice(); govT[k] = St[0].slice();
+                for (const q of qB) { govB[q][k] = rr.F[q][1].slice(); govBT[q][k] = rr.F[q][0].slice(); }
                 komb[k] = { vert: c.typ + ', x = ' + c.x.toFixed(2) + ' m (' + c.krit + ')', H: hh.name, u };
             }
         }
         r = rr;
     });
 
-    const out = { inp, Model: M };
+    const out = { inp, Model: modelOut(M) };                      // x from support 1
     out.Track = { x, onBr, sig_emb };
     for (const g of groups) out.Track[g] = G[g];
     out.Track.comb.gov = gov; out.Track.comb.govTemp = govT;
     out.Track.gap = gapOpen;
     out.Track.rbreak = Brk;
-    out.Bridge = { x: r.xb, xsup: M.xsup, dTemp, dB, dA, dH, dV, Rh };
+    const F = {}, D = {};                                         // deck forces (MN, MNm) and displacements (mm, mrad)
+    for (const g of groups) {
+        F[g] = { N: GB[g].N, M: GB[g].M, V: GB[g].V };
+        D[g] = { u: GB[g].u, w: GB[g].w, th: GB[g].th };
+    }
+    F.comb.gov = { N: govB.N, M: govB.M, V: govB.V };  F.comb.govTemp = { N: govBT.N, M: govBT.M, V: govBT.V };
+    D.comb.gov = { u: govB.u, w: govB.w, th: govB.th };  D.comb.govTemp = { u: govBT.u, w: govBT.w, th: govBT.th };
+    out.Bridge = { x: r.xb, xsup, dTemp, dB, dA, dH, dV, wV, Rh, xF: r.xb, F, D };
     out.LoadPos = { vert: crit, H, komb, Lbrk, Lacc, xloco: xl, xSW: x0 };
     out.Table = table(out);
     out.Info = { nRun, time: (performance.now() - t0) / 1e3, workers: workers ? workers.length : 0 };
@@ -1086,6 +1233,13 @@ function table(out) {
         add('disp', '<i>δ</i><sub>H</sub> vertical traffic, left / right', 'mm', String(Lim.dH), Bk.dH, [-Infinity, Lim.dH]);
         if (out.Model.Ls > 0)
             add('disp', '<i>δ</i><sub>V</sub> vertical traffic, left / right', 'mm', String(Lim.dV), Bk.dV, [-Infinity, Lim.dV]);
+        const Ls = Bk.xsup.slice(1).map((v, i) => v - Bk.xsup[i]);  // span with the largest deflection / L
+        let ig = 0, best = -Infinity;
+        Ls.forEach((l, i) => { const q = Math.max(Bk.wV[0][i], Bk.wV[1][i]) / l; if (q > best) { best = q; ig = i; } });
+        const wl = Math.round(1e3 * Ls[ig] / Lim.wL);                 // whole mm
+        add('disp', '<i>δ</i><sub>V</sub> max deflection, vertical traffic', 'mm', 'L/' + Lim.wL + ' = ' + wl,
+            [0, 1].map(k => [Math.round(Bk.wV[k][ig])]), [-Infinity, wl]);
+        rows[rows.length - 1].dec = 0;
     }
     add('disp', 'Deck end movement, temperature, left / right', 'mm', '–', Bk.dTemp);
     out.inp.Track.gap.forEach((g, i) =>
@@ -1099,8 +1253,10 @@ function table(out) {
         if (isMovable(k)) return;
         for (const g of grp) add('force', 'Support ' + (i + 1) + ', ' + g[1], 'kN', '–', [0, 1].map(s => [Bk.Rh[g[0]][s][i]]));
     });
-    for (const t of rows)
-        t.exceed = t.val.map(v => v.map(x => { const y = Math.round(x * 10) / 10; return y < t.limv[0] || y > t.limv[1]; }));
+    for (const t of rows) {                                       // compared at the printed precision (dec, default 0.1)
+        const p = Math.pow(10, t.dec === undefined ? 1 : t.dec);
+        t.exceed = t.val.map(v => v.map(x => { const y = Math.round(x * p) / p; return y < t.limv[0] || y > t.limv[1]; }));
+    }
     return rows;
 }
 
