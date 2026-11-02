@@ -25,7 +25,7 @@ const FIELDS = [
  ['Bridge','dtype', 'Deck type',                   'drop','2 composite','EN 1991-1-5 6.1.1, Figure 6.1 (AC:2009)', ['1 steel','2 composite','3 concrete']],
  ['Bridge','alfab', S('α','b') + ' (1/K)',          'out', '',          'thermal expansion of the deck (from E)'],
  ['Bridge','Lend',  S('L','end') + ' (m)',          'edit','0.45',      'deck end beyond the end bearings, both ends; the model rounds it to s_r/6 and the bridge length to whole s_r (spans scaled), a rail seat at each deck end'],
- ['Bridge','Kh',    S('K','h') + ' (GN/m)',         'edit','0 1e4',     'longitudinal stiffness per support, 0 = movable bearing; filled in (fixed at the right end) when the number of spans changes'],
+ ['Bridge','Kh',    S('K','h') + ' (GN/m)',         'edit','0 10',      'longitudinal stiffness per support, 0 = movable bearing; filled in (fixed at the right end) when the number of spans changes'],
  ['Bridge','ntrack','Tracks',                      'drop','1',         'number of tracks', ['1','2']],
  ['Bridge','blank2','',                            'blank','',         ''],
  ['Bridge','blank3','',                            'blank','',         ''],
@@ -169,7 +169,7 @@ function onChange(key) {
     case 'L': {                                                    // number of supports changed: K_h follows,
         const ns = vec('L').length + 1; let Kh = vec('Kh');         // fixed bearing at the last (right) support
         if (Kh.length !== ns) {
-            const kf = Kh.some(k => k > 0) ? Math.max(...Kh) : 1e4;
+            const kf = Kh.some(k => k > 0) ? Math.max(...Kh) : 10;
             Kh = new Array(ns - 1).fill(0).concat([kf]);
             P.Kh.value = Kh.map(numfmt).join(' ');
         }
@@ -260,7 +260,7 @@ function drawLoads() {
 function status(t, tip) { $('status').textContent = t; $('status').title = tip || t; }
 function setProg(fr) {
     if (fr === null) { $('progFill').style.width = '0'; $('progTxt').textContent = ''; return; }
-    $('progFill').style.width = Math.round(fr * 118) + 'px';
+    $('progFill').style.width = (100 * fr) + '%';
     $('progTxt').textContent = Math.round(100 * fr) + ' %';
 }
 function enable(on) { for (const id of ['sReport', 'sExport', 'sPrint', 'sPrintSF', 'sPrintD']) $(id).classList.toggle('off', !on); }

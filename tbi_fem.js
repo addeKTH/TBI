@@ -106,7 +106,7 @@ function defaults0(inp0) {
     if (has(B, 'Ls') && !has(B, 'L_end')) B.L_end = B.Ls;
     delete B.Ls; delete B.Ls_dV;
     setdef(B, { type: typ, alfa: a, L_end: 0, n_track: 1, FL: nsup, dT: [35, -35], endsprings: [], nDeck: 6 });
-    if (!has(B, 'Kh')) { B.Kh = new Array(nsup).fill(0); B.Kh[B.FL - 1] = 1e13; }
+    if (!has(B, 'Kh')) { B.Kh = new Array(nsup).fill(0); B.Kh[B.FL - 1] = 1e10; }
     B.endsprings = asArray(B.endsprings);                         // single object (e.g. from JSON) -> array
 
     const T = setdef(inp.Track, { type: 'ballasted' });
