@@ -71,4 +71,12 @@ span with `nDeck` 4 and equal unloaded and loaded resistance. Same number of ana
 largest differences below 1e-6 in the tables, envelopes, rail break gap, coordinates,
 deck forces and displacements and the largest deflection per span.
 
+## Disclaimer
+
+This software is provided for research, education and preliminary assessment. It is provided "as is", without warranty of any kind, express or implied, including but not limited to accuracy, completeness, or fitness for a particular purpose.
+
+The results have not been independently certified and do not replace the verification required by the applicable codes, regulations and infrastructure manager requirements. The user is responsible for checking that the method, the load models, the input and the assumptions suit the case at hand, and for verifying the results independently before using them in design, assessment or any other decision. Load models and dynamic factors are implemented as interpreted by the author and may differ from, or become out of date compared with, the current versions of the standards.
+
+The author accepts no liability for any loss, damage or other consequence arising from the use of this software or its results.
+
 Andreas Andersson, KTH, 2026.
