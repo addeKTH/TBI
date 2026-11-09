@@ -15,7 +15,7 @@ const S = (v, s) => `<i>${v}</i><sub>${s}</sub>`;
 // ---------------------------------------------------------------- input fields
 // tab, key, label (HTML), kind (edit, drop, check, out, blank), default value (Bryngeån), tooltip, items
 const FIELDS = [
- ['Bridge','L',     'Spans <i>L</i> (m)',          'edit','48',        'span lengths, one per span, continuous deck'],
+ ['Bridge','L',     'Spans <i>L</i> (m)',          'edit','48',        'span lengths, one per span, or L1:dL:Ltot, a first span L1, then spans of dL up to the total length; continuous deck'],
  ['Bridge','E',     '<i>E</i> (GPa)',              'edit','210',       "Young's modulus of the deck; within 15 % of 210 GPa = steel"],
  ['Bridge','A',     '<i>A</i> (m²)',               'edit','0.8',       'cross-section area (equivalent steel section for composite decks)'],
  ['Bridge','I',     '<i>I</i> (m⁴)',               'edit','1.0',       'second moment of area'],
@@ -69,10 +69,11 @@ const TABS = ['Bridge', 'Track', 'Load', 'Limits'];
 const NG = 3;                                                      // label/field pairs per row
 const P = {};                                                      // input elements by key
 const maxIn = 200;                                                 // most characters in an input field
-let out = null, running = false;
+let out = null, running = false, stopOn = false;
 
 // ---------------------------------------------------------------- symbols
 const ICON = {
+ stop: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#cc2626"/><rect x="8" y="8" width="8" height="8" rx="1" fill="#fff"/></svg>',
  run: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#21963f"/><polygon points="9.5,7 9.5,17 17.5,12" fill="#fff"/></svg>',
  reset: '<svg viewBox="0 0 24 24"><path d="M18.06 8.5 A7 7 0 1 1 12 5" fill="none" stroke="#cc2626" stroke-width="3"/>' +
         '<polygon points="12,0.8 12,9.2 17.5,5" fill="#cc2626"/></svg>',
@@ -157,9 +158,22 @@ function setv(k, v) { if (P[k].type === 'checkbox') P[k].checked = !!v; else P[k
 // series; NaN for what is not a number, also for an input of more than maxIn characters or a
 // series of more than 1000 values
 const NUM1 = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/;
+// the span lengths from the field L.  L1:dL:Ltot is a first span L1, then spans of dL up to the
+// total length Ltot, which comes back in .s rounded down to whole spans (10:10:59 is 10:10:50)
+function spanL() {
+    const t = String(P.L.value).replace(/,/g, '.').replace(/\s*:\s*/g, ':').trim(), p = t.split(':');
+    const bad = { v: [NaN], s: null };
+    if (t.length > maxIn || p.length !== 3 || !p.every(x => NUM1.test(x))) return bad;
+    const [a, d, T] = p.map(Number);
+    if (!(a > 0 && d > 0 && T >= a)) return bad;
+    const n = Math.floor((T - a) / d + 1e-9);
+    if (n + 1 > 1000) return bad;
+    return { v: [a, ...new Array(n).fill(d)], s: `${+a.toPrecision(6)}:${+d.toPrecision(6)}:${+Number((a + n * d).toFixed(10)).toPrecision(6)}` };
+}
 const vec = k => {
     const s = String(P[k].value).replace(/,/g, '.').replace(/\s*:\s*/g, ':');
     if (s.length > maxIn) return [NaN];
+    if (k === 'L' && s.includes(':')) return spanL().v;
     const out = [];
     for (const t of s.trim().split(/[\s;]+/).filter(x => x !== '')) {
         if (!t.includes(':')) { out.push(NUM1.test(t) ? Number(t) : NaN); continue; }
@@ -187,6 +201,7 @@ const sgnT = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(0);   // report t
 function onChange(key) {
     for (const d of FIELDS)                                        // a comma is a decimal point, also in the box
         if (d.kind === 'edit' && P[d.key].value.includes(',')) P[d.key].value = P[d.key].value.replace(/,/g, '.');
+    if (P.L.value.includes(':')) { const sL = spanL().s; if (sL) P.L.value = sL; }   // Ltot on whole spans
     switch (key) {
     case 'L': {                                                    // number of supports changed: K_h follows,
         const ns = vec('L').length + 1; let Kh = vec('Kh');         // fixed bearing at the last (right) support
@@ -331,18 +346,28 @@ function enable(on) { for (const id of ['sReport', 'sExport', 'sPrint', 'sPrintS
 
 // ---------------------------------------------------------------- run
 async function onRun() {
-    if (running || inputBad()) return;
+    if (running) { if (stopOn) { TBI.stop(); status('Stopping ...'); } return; }
+    if (inputBad()) return;
     let inp;
     try { inp = buildInp(); } catch (e) { status('Input: ' + e.message); return; }
     running = true; enable(false); $('sRun').classList.add('off');
+    const stopTimer = setTimeout(() => {                           // after 1 s the symbol is Stop
+        stopOn = true; $('sRun').innerHTML = ICON.stop; $('sRun').title = 'Stop: ends the run, keeps the input';
+        $('sRun').classList.remove('off');
+    }, 1000);
+    const runEnd = () => {
+        clearTimeout(stopTimer); stopOn = false; running = false; $('sRun').classList.remove('off');
+        $('sRun').innerHTML = ICON.run; $('sRun').title = 'Run: all load cases';
+    };
     status('Running ...'); setProg(0);
     try {
         out = await TBI.analysis(inp, { progress: setProg });
     } catch (e) {
-        out = null; running = false; $('sRun').classList.remove('off');
-        status('Analysis: ' + e.message); return;
+        runEnd();
+        if (e.message === 'stopped') { clearResults(); setProg(null); status('Stopped'); return; }
+        out = null; status('Analysis: ' + e.message); return;
     }
-    running = false; $('sRun').classList.remove('off');
+    runEnd();
     showResults(); enable(true);
     const nex = out.Table.filter(t => t.exceed.flat().some(Boolean)).length;
     status(`${out.Info.nRun} analyses, ${out.Info.time.toFixed(1)} s, ` + (nex ? `${nex} outside limits (red)` : 'all limits met'));

@@ -864,6 +864,8 @@ function getWorkers(opt) {
 }
 
 // jobs: [{Tr, Br, Lk, Os}] -> results in the same order; done() after every job
+let cancelled = false;                                             // TBI.stop: ends a run at its next load case
+TBI.stop = () => { cancelled = true; };
 async function runJobs(jobs, workers, done) {
     const res = new Array(jobs.length);
     const solveHere = async idx => {
@@ -888,6 +890,10 @@ async function runJobs(jobs, workers, done) {
                 if (stop || !m || m.rid !== rid) return;
                 if (m.error) { stop = true; reject(new Error(m.error)); return; }
                 res[m.id] = m.R; left--;
+                if (cancelled) {                                  // the pool is rebuilt at the next run
+                    stop = true; workers.forEach(x => x.terminate()); pool = null;
+                    reject(new Error('stopped')); return;
+                }
                 done();
                 if (!left) resolve(null); else send(w);
             };
@@ -908,6 +914,7 @@ async function runJobs(jobs, workers, done) {
 
 TBI.analysis = async function (inp0, opt) {
     opt = opt || {};
+    cancelled = false;
     const t0 = performance.now();
     const { inp, Model: M } = defaults0(inp0);
     const B = inp.Bridge, T = inp.Track, Ld = inp.Load, Lim = inp.Limits;
@@ -960,6 +967,7 @@ TBI.analysis = async function (inp0, opt) {
     let nTot = 3 + 3 + nV + 2 * H.length + 4 * 5 * H.length, pdone = 0, tProg = performance.now();
     async function done() {
         nRun++;
+        if (cancelled) throw new Error('stopped');
         if (performance.now() - tProg < DT_PROG) return;
         if (opt.progress) {
             pdone = Math.max(pdone, Math.min(nRun / nTot, 0.99));
