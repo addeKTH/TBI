@@ -123,7 +123,7 @@ function defaults0(inp0) {
     else    setdef(T, { e_r: 0.75, u0: [2e-3, 0.5e-3], Fu: [20e3, 30e3] });
     setdef(T, { dT: T.gap.length ? [50, -50] : [0, 0], dT_brk: -50 });
 
-    setdef(inp.Load, { alfa: 1.33, LM71: true, SW: B.L.length > 1, dxPos: 0,
+    setdef(inp.Load, { alfa: 1.33, LM71: true, SW: B.L.length > 1, dxPos: 1,
                        qlbk: 20e3, Qlbk_max: 6000e3, qlak: 33e3, Qlak_max: 1000e3 });
     const sl = bl ? [-112, 112] : [-72, 112];
     setdef(inp.Limits, { sig_br: sl.slice(), sig_emb: sl.slice(), dB: 5, dH: 8, dV: 2, wL: 600, wgap: 50 });
@@ -165,6 +165,9 @@ function check(inp, nsup) {
     else if (Kh.some(k => typeof k === 'number' && !nneg(k))) m.push('K_h must be >= 0');
     for (const f of ['s_r', 'A', 'I', 'E', 'Kv', 'Kv_up']) if (!pos(T[f])) m.push('Track.' + f + ' must be > 0');
     if (!pos(T.u0) || !pos(T.Fu) || !pos(T.Fl)) m.push('track resistance u0, F_u and F_l must be > 0');
+    if (arr(T.u0).length !== 2 || arr(T.Fu).length !== 2) m.push('u0 and F_u need two values (summer, winter)');
+    if (arr(T.dT).length !== 2) m.push('rail temperature change dT needs two values (summer, winter)');
+    if (arr(inp.Limits.sig_br).length !== 2 || arr(inp.Limits.sig_emb).length !== 2) m.push('rail stress limits need two values (compression, tension)');
     if (pos(T.s_r) && !(nneg(T.Le) && T.Le >= 5 * T.s_r)) m.push('L_e must be at least 5 s_r (' + (5 * T.s_r).toFixed(1) + ' m); 100 m is recommended');
     if (!nneg(T.e_r)) m.push('e_r must be >= 0');
     if (![...arr(T.dT), T.dT_brk].every(x => typeof x === 'number' && isFinite(x))) m.push('rail temperature changes must be finite');
