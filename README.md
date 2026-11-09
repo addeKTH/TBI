@@ -20,8 +20,8 @@ between runs), in two rounds: temperature, vertical traffic sweeps, braking/trac
 the intact rail first; then the broken rail and the load combinations, which restart from
 the saved temperature step. Without workers (e.g. `index.html` opened as a file) the same
 cases run on the main thread. The results are identical in both modes; the progress bar
-is updated about every 0.2 s. The bridge over Bryngeån takes about 0.1 s with 24 cores
-(32 analyses), with the locomotive stepped every 0.65 m about 0.3 s (260 analyses).
+is updated about every 0.2 s. The bridge over Bryngeån takes about 0.6 s with 24 cores
+(274 analyses, default load step 1 m).
 
 ## The interface
 
@@ -39,7 +39,8 @@ is updated about every 0.2 s. The bridge over Bryngeån takes about 0.1 s with 2
 Input tabs Bridge, Track, Load and Limits. Vectors are typed with spaces, e.g. `30 40 30`.
 `K_h` is filled in when the number of spans changes (fixed bearing at the right end).
 The bearings are drawn by `K_h`: roller for 0, fixed above 10 GN/m, otherwise roller with
-a spring. The Load tab shows LM71 and SW/0 with dimensions. x = 0 at support 1 in input
+a spring. The Load tab shows LM71 and SW/0 with dimensions; by default they are moved over the
+bridge in steps of 1 m (0 = fixed positions from the movable end bearing). x = 0 at support 1 in input
 (REJ position), results and diagrams. The model uses deck elements of `s_r/6`, rounds
 `L_end` and the bearing positions to that length and scales the spans so that the deck is
 a whole number of sleeper spacings; the input fields show the given values. Deck results
