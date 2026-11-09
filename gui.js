@@ -52,7 +52,7 @@ const FIELDS = [
  ['Load','alfa',    '<i>α</i>',                    'edit','1.33',      'load classification factor'],
  ['Load','LM71',    'LM71',                        'check',true,       'LM71 on the whole bridge, locomotive from the movable bearing'],
  ['Load','SW',      'SW/0',                        'check',false,      'SW/0 (continuous decks)'],
- ['Load','dxPos',   'Δ<i>x</i> (m)',               'edit','0',         '0 = fixed load positions, > 0 = locomotive / SW/0 moved in steps'],
+ ['Load','dxPos',   'Δ<i>x</i> (m)',               'edit','1',         '0 = fixed load positions, > 0 = locomotive / SW/0 moved in steps'],
  ['Load','qlbk',    S('q','lbk') + ' (kN/m)',       'edit','20',        'braking'],
  ['Load','Qlbk',    S('Q','lbk,max') + ' (kN)',     'edit','6000',      'max braking force'],
  ['Load','qlak',    S('q','lak') + ' (kN/m)',       'edit','33',        'traction'],
@@ -240,7 +240,7 @@ function onChange(key) {
     if (inputBad()) {                                              // no results, nothing to export, print or save
         clearResults(); $('model').innerHTML = '';
         $('sSave').classList.add('off');
-        status('input error'); $('status').style.color = '#b30000';
+        status('input error'); $('status').style.color = '#b30000'; setProg(null);
         return;
     }
     $('sSave').classList.remove('off');
@@ -274,6 +274,9 @@ function inputBad() {
         if (pos.includes(k)) b = b || v.some(x => x <= 0);
         if (nng.includes(k)) b = b || v.some(x => x < 0);
         if (k === 'Kh') b = b || v.length !== vec('L').length + 1;
+        if (['dTN', 'u0', 'Fu', 'sigbr', 'sigemb'].includes(k)) b = b || v.length !== 2;   // two values
+        if (k === 'dTR') b = b || (v.length !== 0 && v.length !== 2);
+        if (k === 'Kv') b = b || v.length > 2;
         if (k === 'L') { const s = v.reduce((a, c) => a + c, 0); b = b || s < 1 || s > 2000; }   // total length, as BeamStat
         // the size of the model: sleeper spacing, embankment, load positions, number of nodes
         if (k === 'sr') b = b || v.some(x => x < 0.1 || x > 5) || nNodes() > 30000;
@@ -349,7 +352,7 @@ async function onRun() {
     if (running) { if (stopOn) { TBI.stop(); status('Stopping ...'); } return; }
     if (inputBad()) return;
     let inp;
-    try { inp = buildInp(); } catch (e) { status('Input: ' + e.message); return; }
+    try { inp = buildInp(); } catch (e) { status('Input: ' + e.message); $('status').style.color = '#b30000'; return; }
     running = true; enable(false); $('sRun').classList.add('off');
     const stopTimer = setTimeout(() => {                           // after 1 s the symbol is Stop
         stopOn = true; $('sRun').innerHTML = ICON.stop; $('sRun').title = 'Stop: ends the run, keeps the input';
@@ -359,13 +362,13 @@ async function onRun() {
         clearTimeout(stopTimer); stopOn = false; running = false; $('sRun').classList.remove('off');
         $('sRun').innerHTML = ICON.run; $('sRun').title = 'Run: all load cases';
     };
-    status('Running ...'); setProg(0);
+    status('Running ...'); $('status').style.color = ''; setProg(0);
     try {
         out = await TBI.analysis(inp, { progress: setProg });
     } catch (e) {
         runEnd();
         if (e.message === 'stopped') { clearResults(); setProg(null); status('Stopped'); return; }
-        out = null; status('Analysis: ' + e.message); return;
+        out = null; setProg(null); status('Analysis: ' + e.message); $('status').style.color = '#b30000'; return;
     }
     runEnd();
     showResults(); enable(true);
