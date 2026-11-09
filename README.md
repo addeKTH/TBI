@@ -40,7 +40,9 @@ Input tabs Bridge, Track, Load and Limits. Vectors are typed with spaces, e.g. `
 `K_h` is filled in when the number of spans changes (fixed bearing at the right end).
 The bearings are drawn by `K_h`: roller for 0, fixed above 10 GN/m, otherwise roller with
 a spring. The Load tab shows LM71 and SW/0 with dimensions; by default they are moved over the
-bridge in steps of 1 m (0 = fixed positions from the movable end bearing). x = 0 at support 1 in input
+bridge in steps of 1 m, for a total length above 200 m the shortest span / 15 within 1 to 5 m.
+The box follows the spans unless another value has been typed (0 = fixed positions from the
+movable end bearing). x = 0 at support 1 in input
 (REJ position), results and diagrams. The model uses deck elements of `s_r/6`, rounds
 `L_end` and the bearing positions to that length and scales the spans so that the deck is
 a whole number of sleeper spacings; the input fields show the given values. Deck results
