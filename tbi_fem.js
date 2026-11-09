@@ -91,6 +91,14 @@ function modelOut(M) {
     return Mo;
 }
 
+// default load step (m): 1, for a total length > 200 m shortest span / 15
+// within 1 to 5 (as tbi_dx in TBI_fem.m)
+TBI.dxDefault = function (L) {
+    const a = asArray(L);
+    if (!a.length || !a.every(x => x > 0) || a.reduce((s, x) => s + x, 0) <= 200) return 1;
+    return Math.min(5, Math.max(1, Math.round(Math.min(...a) / 15 * 100) / 100));
+};
+
 function defaults0(inp0) {
     const inp = clone(inp0 || {});
     if (!inp.Bridge) throw new Error('inp.Bridge is missing.');
@@ -123,7 +131,7 @@ function defaults0(inp0) {
     else    setdef(T, { e_r: 0.75, u0: [2e-3, 0.5e-3], Fu: [20e3, 30e3] });
     setdef(T, { dT: T.gap.length ? [50, -50] : [0, 0], dT_brk: -50 });
 
-    setdef(inp.Load, { alfa: 1.33, LM71: true, SW: B.L.length > 1, dxPos: 1,
+    setdef(inp.Load, { alfa: 1.33, LM71: true, SW: B.L.length > 1, dxPos: TBI.dxDefault(B.L),
                        qlbk: 20e3, Qlbk_max: 6000e3, qlak: 33e3, Qlak_max: 1000e3 });
     const sl = bl ? [-112, 112] : [-72, 112];
     setdef(inp.Limits, { sig_br: sl.slice(), sig_emb: sl.slice(), dB: 5, dH: 8, dV: 2, wL: 600, wgap: 50 });
