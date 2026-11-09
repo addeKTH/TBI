@@ -52,7 +52,7 @@ const FIELDS = [
  ['Load','alfa',    '<i>α</i>',                    'edit','1.33',      'load classification factor'],
  ['Load','LM71',    'LM71',                        'check',true,       'LM71 on the whole bridge, locomotive from the movable bearing'],
  ['Load','SW',      'SW/0',                        'check',false,      'SW/0 (continuous decks)'],
- ['Load','dxPos',   'Δ<i>x</i> (m)',               'edit','1',         '0 = fixed load positions, > 0 = locomotive / SW/0 moved in steps'],
+ ['Load','dxPos',   'Δ<i>x</i> (m)',               'edit','1',         '0 = fixed load positions, > 0 = locomotive / SW/0 moved in steps; follows L: 1 m, for a total length > 200 m shortest span / 15 within 1 to 5 m; another value is kept'],
  ['Load','qlbk',    S('q','lbk') + ' (kN/m)',       'edit','20',        'braking'],
  ['Load','Qlbk',    S('Q','lbk,max') + ' (kN)',     'edit','6000',      'max braking force'],
  ['Load','qlak',    S('q','lak') + ' (kN/m)',       'edit','33',        'traction'],
@@ -198,10 +198,12 @@ const sgn = v => (isFinite(v) ? (v >= 0 ? '+' : '') + v.toFixed(0) : '');
 const sgnT = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(0);   // report text, typographic minus
 
 // ---------------------------------------------------------------- input changed
+let dxAuto = 1;                                                    // load step set by the rule, follows L while unchanged
 function onChange(key) {
     for (const d of FIELDS)                                        // a comma is a decimal point, also in the box
         if (d.kind === 'edit' && P[d.key].value.includes(',')) P[d.key].value = P[d.key].value.replace(/,/g, '.');
     if (P.L.value.includes(':')) { const sL = spanL().s; if (sL) P.L.value = sL; }   // Ltot on whole spans
+    if (key === '' || key === 'loaded') dxAuto = TBI.dxDefault(vec('L'));              // the value in the box is kept
     switch (key) {
     case 'L': {                                                    // number of supports changed: K_h follows,
         const ns = vec('L').length + 1; let Kh = vec('Kh');         // fixed bearing at the last (right) support
@@ -209,6 +211,11 @@ function onChange(key) {
             const kf = Kh.some(k => k > 0) ? Math.max(...Kh) : 10;
             Kh = new Array(ns - 1).fill(0).concat([kf]);
             P.Kh.value = Kh.map(numfmt).join(' ');
+        }
+        if (vec('L').length && vec('L').every(x => x > 0)) {       // the load step follows L unless changed by hand
+            const dxNew = TBI.dxDefault(vec('L'));
+            if (num('dxPos') === dxAuto) P.dxPos.value = String(dxNew);
+            dxAuto = dxNew;
         }
         break;
     }
