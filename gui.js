@@ -68,6 +68,7 @@ const FIELDS = [
 const TABS = ['Bridge', 'Track', 'Load', 'Limits'];
 const NG = 3;                                                      // label/field pairs per row
 const P = {};                                                      // input elements by key
+const maxIn = 200;                                                 // most characters in an input field
 let out = null, running = false;
 
 // ---------------------------------------------------------------- symbols
@@ -118,6 +119,7 @@ function buildInputs() {
                 el = document.createElement('input'); el.type = 'checkbox'; el.className = 'chk';
             } else {
                 el = document.createElement('input'); el.type = 'text'; el.className = 'ed' + (d.kind === 'out' ? ' out' : '');
+                el.maxLength = maxIn;
                 if (d.kind === 'out') el.readOnly = true;
             }
             el.title = d.tip; el.style.gridRow = r; el.style.gridColumn = c + 1;
@@ -151,8 +153,26 @@ function tabsSwitch(id) {
 }
 const getv = k => (P[k].type === 'checkbox' ? P[k].checked : P[k].value);
 function setv(k, v) { if (P[k].type === 'checkbox') P[k].checked = !!v; else P[k].value = v; }
-const vec = k => String(P[k].value).trim().split(/[\s,;]+/).filter(s => s !== '').map(Number);
-const num = k => { const v = vec(k); return v.length ? v[0] : NaN; };
+// numbers from a field: space and ; separate, a comma is a decimal point, a:b and a:s:b give a
+// series; NaN for what is not a number, also for an input of more than maxIn characters or a
+// series of more than 1000 values
+const NUM1 = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/;
+const vec = k => {
+    const s = String(P[k].value).replace(/,/g, '.').replace(/\s*:\s*/g, ':');
+    if (s.length > maxIn) return [NaN];
+    const out = [];
+    for (const t of s.trim().split(/[\s;]+/).filter(x => x !== '')) {
+        if (!t.includes(':')) { out.push(NUM1.test(t) ? Number(t) : NaN); continue; }
+        const p = t.split(':');
+        if (p.length > 3 || !p.every(x => NUM1.test(x))) return [NaN];
+        const [a, st, b] = p.length === 2 ? [+p[0], 1, +p[1]] : p.map(Number);
+        const n = st ? Math.floor((b - a) / st + 1e-10) + 1 : -1;
+        if (!st || out.length + n > 1000) return [NaN];
+        for (let i = 0; i < n; i++) out.push(Number((a + i * st).toPrecision(12)));
+    }
+    return out;
+};
+const num = k => { const v = vec(k); return v.length === 1 ? v[0] : NaN; };
 function numfmt(x) {                                               // 1e4 instead of 10000
     if (x !== 0 && (Math.abs(x) >= 1e4 || Math.abs(x) < 1e-3)) {
         const e = Math.floor(Math.log10(Math.abs(x)));
@@ -160,15 +180,17 @@ function numfmt(x) {                                               // 1e4 instea
     }
     return String(+x.toPrecision(12));
 }
-const sgn = v => (v >= 0 ? '+' : '') + v.toFixed(0);
+const sgn = v => (isFinite(v) ? (v >= 0 ? '+' : '') + v.toFixed(0) : '');
 const sgnT = v => (v >= 0 ? '+' : '−') + Math.abs(v).toFixed(0);   // report text, typographic minus
 
 // ---------------------------------------------------------------- input changed
 function onChange(key) {
+    for (const d of FIELDS)                                        // a comma is a decimal point, also in the box
+        if (d.kind === 'edit' && P[d.key].value.includes(',')) P[d.key].value = P[d.key].value.replace(/,/g, '.');
     switch (key) {
     case 'L': {                                                    // number of supports changed: K_h follows,
         const ns = vec('L').length + 1; let Kh = vec('Kh');         // fixed bearing at the last (right) support
-        if (Kh.length !== ns) {
+        if (Kh.length !== ns && vec('L').every(x => x > 0)) {
             const kf = Kh.some(k => k > 0) ? Math.max(...Kh) : 10;
             Kh = new Array(ns - 1).fill(0).concat([kf]);
             P.Kh.value = Kh.map(numfmt).join(' ');
@@ -199,12 +221,53 @@ function onChange(key) {
     } else { P.dTN.readOnly = false; P.dTN.classList.remove('out'); }
     P.dTbrk.value = sgn(num('TRmin') - T0);
     P.alfab.value = Math.abs(num('E') / 210 - 1) < 0.15 ? '12e-6' : '10e-6';
+    $('status').style.color = '';
+    if (inputBad()) {                                              // no results, nothing to export, print or save
+        clearResults(); $('model').innerHTML = '';
+        $('sSave').classList.add('off');
+        status('input error'); $('status').style.color = '#b30000';
+        return;
+    }
+    $('sSave').classList.remove('off');
+    if ($('status').textContent === 'input error') status('');
     drawModel();
     drawLoads();
     if (key && out) {                                              // results no longer match the input
         enable(false);
         if (!$('status').textContent) status('Input changed: results not up to date, press Run');
     }
+}
+
+// about the number of nodes of the model: rails s_r/2, deck s_r/2 at least
+function nNodes() {
+    const d = num('sr') / 2, Lb = vec('L').reduce((a, c) => a + c, 0);
+    const n = num('ntrack') * (Lb + 2 * num('Le')) / d + Lb / d;
+    return isFinite(n) ? n : 0;
+}
+// the input fields with an error are light red; true if there is one
+function inputBad() {
+    const pos = ['L', 'E', 'A', 'I', 'Ar', 'Ir', 'sr', 'Le', 'Fl', 'Kv', 'Fu', 'u0', 'alfa'];   // > 0
+    const nng = ['Kh', 'dxPos', 'qlbk', 'Qlbk', 'qlak', 'Qlak', 'Lend'];                        // >= 0
+    const vct = ['L', 'Kh', 'dTN', 'u0', 'Fu', 'Kv', 'gap', 'dTR', 'sigbr', 'sigemb'];          // several values
+    const emp = ['gap', 'dTR'];                                                                 // may be empty
+    let any = false;
+    for (const d of FIELDS) {
+        const k = d.key;
+        if (d.kind !== 'edit' || (k === 'dTN' && P.dTN.readOnly)) continue;
+        const v = vec(k);
+        let b = v.some(x => !isFinite(x)) || (!v.length && !emp.includes(k)) || (v.length > 1 && !vct.includes(k));
+        if (pos.includes(k)) b = b || v.some(x => x <= 0);
+        if (nng.includes(k)) b = b || v.some(x => x < 0);
+        if (k === 'Kh') b = b || v.length !== vec('L').length + 1;
+        if (k === 'L') { const s = v.reduce((a, c) => a + c, 0); b = b || s < 1 || s > 2000; }   // total length, as BeamStat
+        // the size of the model: sleeper spacing, embankment, load positions, number of nodes
+        if (k === 'sr') b = b || v.some(x => x < 0.1 || x > 5) || nNodes() > 30000;
+        if (k === 'Le') b = b || v.some(x => x > 1000) || nNodes() > 30000;
+        if (k === 'dxPos') b = b || v.some(x => x > 0 && vec('L').reduce((a, c) => a + c, 0) / x > 1000);
+        P[k].classList.toggle('bad', b);
+        any = any || b;
+    }
+    return any;
 }
 
 function buildInp() {
@@ -235,6 +298,7 @@ function buildInp() {
 // ---------------------------------------------------------------- model
 function drawModel() {
     const box = $('model');
+    if (inputBad()) return;
     try {
         const d = TBI.defaults(buildInp());
         const W = box.clientWidth, H = box.clientHeight;
@@ -267,7 +331,7 @@ function enable(on) { for (const id of ['sReport', 'sExport', 'sPrint', 'sPrintS
 
 // ---------------------------------------------------------------- run
 async function onRun() {
-    if (running) return;
+    if (running || inputBad()) return;
     let inp;
     try { inp = buildInp(); } catch (e) { status('Input: ' + e.message); return; }
     running = true; enable(false); $('sRun').classList.add('off');
@@ -337,11 +401,15 @@ function drawDiagrams() {
 }
 
 // ---------------------------------------------------------------- reset, save, open
-function onReset() {
-    for (const d of FIELDS) if (d.kind !== 'out' && d.kind !== 'blank') setv(d.key, d.val);
+// no results: tables and diagrams empty, nothing to export or print
+function clearResults() {
     out = null; enable(false); lcOptions();
     $('tables').innerHTML = '<p id="hint">Press Run to compute all load cases.</p>';
     $('diags').innerHTML = '';  $('bsfDiags').innerHTML = '';  $('bdDiags').innerHTML = '';
+}
+function onReset() {
+    for (const d of FIELDS) if (d.kind !== 'out' && d.kind !== 'blank') setv(d.key, d.val);
+    clearResults();
     onChange('');
     status('Default input (Bryngeån)'); setProg(null);
 }
@@ -391,18 +459,21 @@ async function onSave() {
 function onOpen() { $('fileIn').value = ''; $('fileIn').click(); }
 $('fileIn').addEventListener('change', async e => {
     const f = e.target.files[0]; if (!f) return;
+    if (f.size > 1e6) { status('Open: the file is larger than 1 MB'); return; }
     let S;
     try { S = JSON.parse(await f.text()); } catch (err) { status('Open: ' + err.message); return; }
+    if (!S || typeof S !== 'object' || Array.isArray(S)) { status('Open: no input fields in the file'); return; }
     for (const d of FIELDS) {
         if (!(d.key in S) || d.kind === 'out' || d.kind === 'blank') continue;
         const v = S[d.key];
         if (d.kind === 'check') setv(d.key, !!v);
+        else if (d.kind === 'drop') { if (d.items.includes(String(v))) setv(d.key, String(v)); }   // a listed value, or the field stays
         else if (typeof v === 'number') setv(d.key, numfmt(v));
-        else if (Array.isArray(v)) setv(d.key, v.map(numfmt).join(' '));
-        else setv(d.key, v);
+        else if (Array.isArray(v)) { if (v.every(x => typeof x === 'number')) setv(d.key, v.map(numfmt).join(' ')); }
+        else if (typeof v === 'string') setv(d.key, v);
     }
     onChange('loaded');
-    status('Input loaded: ' + f.name);
+    if ($('status').textContent !== 'input error') status('Input loaded: ' + f.name);
 });
 
 // ---------------------------------------------------------------- Excel

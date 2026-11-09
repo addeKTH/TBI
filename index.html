@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://addekth.goatcounter.com; connect-src 'self' https://addekth.goatcounter.com; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Longitudinal Track-Bridge Interaction</title>
 <style>
@@ -42,6 +43,7 @@ html, body { margin: 0; padding: 0; background: #e4e4e4; color: #000;
 input.ed, select.ed { width: 100px; height: 22px; box-sizing: border-box; font: var(--fs) "Segoe UI", system-ui, sans-serif;
                       border: 1px solid #a0a0a0; padding: 1px 4px; background: #fff; }
 input.ed.out { background: #e6e6e6; }
+input.ed.bad { background: #ffd6d6; }
 input.chk { margin: 4px 0 0 0; width: 16px; height: 16px; justify-self: start; }
 #model { flex: 1; background: #fff; border: 1px solid #adadad; min-height: 0; }
 /* results */
@@ -141,14 +143,14 @@ table.res { margin-bottom: 10px; }
     </div>
   </div>
 </div>
-<div id="foot">Last modified 2026-11-02<div style="max-width:560px; margin:4px auto 0; font-style:italic">For research, education and preliminary assessment. Provided "as is", without warranty. Results must be verified independently by the user, and the author accepts no liability for their use.</div></div>
+<div id="foot">Last modified 2026-11-09<div style="max-width:560px; margin:4px auto 0; font-style:italic">For research, education and preliminary assessment. Provided "as is", without warranty. Results must be verified independently by the user, and the author accepts no liability for their use.</div></div>
 <div id="report"></div>
 <div id="printDiag"></div>
 <input type="file" id="fileIn" accept=".json,application/json" style="display:none">
-<script src="tbi_fem.js?v=2026-11-02d"></script>
-<script src="plots.js?v=2026-11-02d"></script>
-<script src="xlsx.js?v=2026-11-02d"></script>
-<script src="gui.js?v=2026-11-02d"></script>
-<script data-goatcounter="https://addekth.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+<script src="tbi_fem.js?v=2026-11-09b"></script>
+<script src="plots.js?v=2026-11-09b"></script>
+<script src="xlsx.js?v=2026-11-09b"></script>
+<script src="gui.js?v=2026-11-09b"></script>
+<script data-goatcounter="https://addekth.goatcounter.com/count" async src="count.js"></script>
 </body>
 </html>
