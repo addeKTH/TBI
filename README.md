@@ -1,78 +1,110 @@
-# Longitudinal track-bridge interaction — web version
+# Longitudinal track-bridge interaction (TBI), 2D — web version
 
-A browser port of `TBI_GUI.m` and the solver `TBI_fem.m`: longitudinal track-bridge
-interaction (TBI) according to EN 1991-2:2024, 8.5.3–8.5.4. 2D FE model with rail and
-deck as beams, nonlinear track resistance (Table 8.9), bearings with longitudinal
-springs, two-step analysis (temperature on unloaded track, then vertical traffic and
-braking/traction with loaded track resistance), rail break check (CEN/TR 17231 A.2).
-No build step and no dependencies: static files for GitHub Pages.
+Longitudinal track-bridge interaction according to EN 1991-2:2024, 8.5.3–8.5.4, in the
+browser: 2D FE model with rail(s) and deck as beams, nonlinear track resistance
+(Table 8.9), bearings and end screens as springs, two-step analysis (temperature on
+unloaded track, then vertical traffic and braking/traction on loaded track), rail break
+(CEN/TR 17231 A.2). JavaScript port of the MATLAB version (`../TBI_2D_Matlab`), with the
+same files, input, analysis and results. No build step and no libraries: static files.
 
 ## Running it
 
-Open `index.html` in a browser, or serve the folder:
+Serve the folder and open `index.html`, e.g. `python -m http.server 8000`, then
+http://localhost:8000. The load cases are solved in parallel in Web Workers.
 
-```
-python -m http.server 8000      # then open http://localhost:8000
-```
+## Files (one per MATLAB file)
 
-The load cases are solved in parallel in Web Workers (one per processor core, kept
-between runs), in two rounds: temperature, vertical traffic sweeps, braking/traction and
-the intact rail first; then the broken rail and the load combinations, which restart from
-the saved temperature step. Without workers (e.g. `index.html` opened as a file) the same
-cases run on the main thread. The results are identical in both modes; the progress bar
-is updated about every 0.2 s. The bridge over Bryngeån takes about 0.6 s with 24 cores
-(274 analyses, default load step 1 m).
+| File | MATLAB | Content |
+|---|---|---|
+| `index.html` | – | page skeleton, Content Security Policy, script tags |
+| `tbi.css` | – | all styles (screen and print) |
+| `tbi_fem.js` | `TBI_fem.m` | input defaults and check, JSON input, model, load arrangements, solver, analysis, results table |
+| `tbi_worker.js` | (parfor) | Web Worker: builds the model once per run and solves load cases |
+| `tbi_gui.js` | `TBI_gui.m` | input fields, events, run, result tables, open/save, export, print |
+| `tbi_plot.js` | `TBI_plot.m` | SVG drawings: model, load models, rail stress and deck diagrams |
+| `tbi_report.js` | `TBI_report.m` | report as a printable HTML page (save as PDF in the print dialog) |
+| `tbi_xlsx.js` | – | minimal Excel (.xlsx) writer |
+| `tbi_input.json` | `TBI_input.json` | default input (the bridge over Bryngeån) |
+| `count.js` | – | GoatCounter page counter (unchanged) |
+| `test/` | – | `make_reference.m` (MATLAB reference of the 31 benchmark cases), `test.html` / `test.js` (comparison in the browser) |
 
-## The interface
+## Interfaces (shared by all files)
 
-| Control | Behaviour |
-|---|---|
-| Run | all load cases, summer and winter (temperature, LM71/SW/0, braking, traction, load combination, rail break) |
-| Reset | default input (the bridge over Bryngeån), clears the results |
-| Open / Save | input fields as JSON, same format as `TBI_GUI.m` |
-| Print | report on A4 (basis, model, input, results, diagrams); choose "Save as PDF" in the print dialog |
-| Tables, Excel symbol | tables and diagram data as `.xlsx` (sheets Rail stress, Displacements, Bearing forces, Rail stress diagram, Bridge SF diagram, Bridge disp diagram); values outside the limits in bold red, deck ends and bearings in bold |
-| Rail stress, print symbol | the three rail stress diagrams on one A4 page (`TBI_rail_stress`) |
-| Bridge SF, print symbol | deck M, V and N for the chosen load case; prints all three load cases on three A4 pages (`TBI_bridge_SF`) |
-| Bridge disp, print symbol | deck u, w and rotation, as Bridge SF (`TBI_bridge_disp`) |
+All functions are on one global object `TBI` (no modules, so that the page also works
+without a server for the GUI and the worker can use `importScripts`).
 
-Input tabs Bridge, Track, Load and Limits. Vectors are typed with spaces, e.g. `30 40 30`.
-`K_h` is filled in when the number of spans changes (fixed bearing at the right end).
-The bearings are drawn by `K_h`: roller for 0, fixed above 10 GN/m, otherwise roller with
-a spring. The Load tab shows LM71 and SW/0 with dimensions; by default they are moved over the
-bridge in steps of 1 m, for a total length above 200 m the shortest span / 15 within 1 to 5 m.
-The box follows the spans unless another value has been typed (0 = fixed positions from the
-movable end bearing). x = 0 at support 1 in input
-(REJ position), results and diagrams. The model uses deck elements of `s_r/6`, rounds
-`L_end` and the bearing positions to that length and scales the spans so that the deck is
-a whole number of sleeper spacings; the input fields show the given values. Deck results
-are given at the rail seats. The load combination is evaluated with the deck
-temperature (step 1) and without it (at neutral temperature the track resistance has not
-yielded, which can govern short decks); rows and diagram give the envelope of both. With
-rail expansion joints the rail temperature is included (empty field: ±50 K), the
-temperature case is shown as total rail stress (the additional stress is not defined at a
-joint) and the rail stress of the combination is checked without temperature. The deck temperature
-change follows EN 1991-1-5 6.1.3 and Figure 6.1 (AC:2009) unless "direct" is chosen.
+`tbi_fem.js`
 
-## Files
+- `TBI.readJson(obj)` → `{inp, opt}`: the fields of the GUI / `TBI_input.json` (text as in
+  the boxes, engineering units) to the input struct in SI units, as `readJson` in
+  `TBI_fem.m`; `opt` holds `nlgeom` and `nInc` when present.
+- `TBI.setDefaults(inp)` → completed copy of `inp` (defaults and input check as
+  `setDefaults`/`checkInput`); errors are thrown as `Error` with a readable message.
+- `TBI.model(inp)` → `{inp, Model}` (as `opt.defaultsOnly`): input with defaults and the
+  geometry as rounded in the model.
+- `await TBI.analysis(inp, opt)` → `out`. `opt.nlgeom` (false), `opt.nInc` (1),
+  `opt.progress(fraction)`, `opt.workers` (number of workers, 0 = main thread).
+- `TBI.stop()` ends a running analysis (it rejects with `Error('stopped')`).
+- `TBI.springLaw(spec)`, `TBI.fixInc(n)` and the other helpers as in `TBI_fem.m`.
 
-| File | Content |
-|---|---|
-| `index.html` | page layout, styles, print layout |
-| `gui.js` | input fields, events, run, tables, Save/Open, Excel export, report |
-| `tbi_fem.js` | defaults, FE solver (`TBI.solve`), complete analysis (`TBI.analysis`), summary table |
-| `plots.js` | SVG drawings: model sketch, load models, rail stress and deck diagrams |
-| `xlsx.js` | minimal Excel writer with bold and red bold cells |
+`out` has the fields of `TBI_fem.m` (x from support 1, SI units except where stated):
+
+- MATLAB columns summer / winter become the first index `[k]`, k = 0 summer, 1 winter:
+  a MATLAB `nx × 2` matrix is `[2][nx]` in JavaScript.
+- `out.inp`, `out.Model` = {Lb, Ls, x0, Le, L, xsup, s_r, dL, dLd, e_r2}.
+- `out.Track` = {x [nx], onBr [nx], sig_emb [2], rej, temp/LM71/SW/brk/acc/comb:
+  {min [2][nx], max [2][nx]} (MPa), comb.gov [2][nx], comb.govTemp [2][nx],
+  gap {temp [2][ng], combMin [2][ng], combMax [2][ng]} (mm),
+  rbreak {x [nc], w [nc], wmax, xmax, S0 [nx], S [nx], dT_R, dT_B, wCWR}}.
+- `out.Bridge` = {x, xF [nb], xsup, dTemp/dB/dA/dH/dV [2][2] (season, left/right end, mm),
+  wV [2][nspan] (mm), Rh.{group} [2][nsup] (kN), F.{group}.{N,M,V} and
+  D.{group}.{u,w,th} {min [2][nb], max [2][nb]} (MN, MNm, mm, mrad),
+  F.comb.gov/govTemp.{N,M,V} [2][nb], D.comb.gov/govTemp.{u,w,th} [2][nb]}.
+- `out.LoadPos` = {vert [{type, x, crit, season}], H [{name, fb, fa, sb, sa}],
+  comb [2] {vert, H, u, temp}, Lbrk, Lacc, xloco [], xSW []}.
+- `out.Table` = [{name, unit, lim, val, limv, exceed, dec}]; `val` and `exceed` as
+  `[row][k]` (rows min/max or left/right, k summer/winter). `name` and `lim` keep the
+  LaTeX of `TBI_fem.m` (e.g. `$\delta_\mathrm{B}$`); the GUI and the report convert it
+  with `TBI.tex2html`.
+- `out.Info` = {nRun, time (s), nlgeom, nInc}.
+- NaN where MATLAB has NaN (e.g. rail break row `[NaN wmax]`); JSON has no NaN, so
+  `null` is used only when results are saved to a file.
+
+`tbi_plot.js` draws into a given container element: `TBI.plotModel(el, out)`,
+`TBI.plotLoads(el, which)`, `TBI.plotRail(els[3], out)`, `TBI.plotBridge(els[3], out, lc,
+kind)`. `tbi_report.js`: `TBI.report(out)` builds the report element for printing.
+
+## Code style
+
+- Each file starts with a header: purpose, author, date ("assisted by Claude"), usage.
+- Sections and function names follow the MATLAB file, so the two can be read side by
+  side; units in comments; comments say why, not what.
+- `'use strict'`, `const`/`let`, plain functions, no frameworks; 4 spaces; lines up to
+  about 120 characters.
+- No `innerHTML` with input or file content (DOM built with `createElement` and
+  `textContent`); no `eval`, no inline scripts or styles in the HTML (strict CSP).
 
 ## Verification
 
-The analysis was compared with `TBI_fem.m` (MATLAB R2025b, 2026-10-29) in four cases
-(`test/make_reference.m` writes `reference.json`, `test/test.html` compares): the bridge
-over Bryngeån; three spans with a rail expansion joint, an end screen and a nonlinear
-support; two tracks, ballastless, 'shifted' loaded resistance and moving loads; a 70 m
-span with `nDeck` 4 and equal unloaded and loaded resistance. Same number of analyses;
-largest differences below 1e-6 in the tables, envelopes, rail break gap, coordinates,
-deck forces and displacements and the largest deflection per span.
+`test/make_reference.m` runs `TBI_fem.m` for the 31 cases of
+`../benchmark/benchmark_cases.m` and writes `test/reference.json`; `test/test.html`
+runs the same cases in the browser and compares the whole output (options in the URL:
+`?workers=0`, `?cases=1,5`, `?tol=1e-4`).
+
+State 2026-11-13 (TBI_fem.m of 2026-11-12): 31 of 31 cases agree, largest difference
+5e-5 (kN), same number of analyses, same load case and table names. Run time with
+the workers (24 cores): all 31 cases 8 s; the bridge over Bryngeån with moving loads
+(274 analyses) 0.3 s, on one thread 2.2 s (MATLAB serial 2.6 s).
+
+## Security
+
+Static page, no server code, no cookies or storage. Strict Content Security Policy
+(scripts, styles and workers only from the page's own origin; no inline scripts or
+styles, no `eval`); no `innerHTML` (DOM built with `createElement`/`textContent`).
+Opened JSON files: at most 1 MB, parsed with `JSON.parse`, only plain objects, only the
+known keys are read (no prototype pollution), values checked like typed input. Excel
+cells are written as inline strings (no formulas). The only external request is the
+GoatCounter page counter (`count.js`, `img-src`/`connect-src` addekth.goatcounter.com).
 
 ## Disclaimer
 
